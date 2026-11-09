@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useState } from 'react'
 import { MenuBar } from './components/MenuBar'
 import { Dock } from './components/Dock'
 import { Window } from './components/Window'
@@ -19,14 +19,12 @@ export default function App() {
 function Desktop() {
   const windows = useOS((s) => s.windows)
 
-  useEffect(() => {
-    const { openApp, windows } = useOS.getState()
-    // primeira visita: abre Terminal e Guia (com progresso salvo, as janelas voltam como estavam)
-    if (!Object.values(windows).some((w) => w?.open)) {
-      openApp('terminal')
-      openApp('guide')
-    }
-  }, [])
+  // a área de trabalho começa vazia: o aluno abre os apps pelo Dock
+  const [welcome, setWelcome] = useState(() => {
+    const s = useOS.getState()
+    return !Object.values(s.windows).some((w) => w?.open) && s.missionIdx === 0 && s.stepIdx === 0
+  })
+  const anyOpen = Object.values(windows).some((w) => w?.open)
 
   const cwd = useOS((s) => s.cwd)
   useOS((s) => s.depth)
@@ -66,6 +64,16 @@ function Desktop() {
         <Window id="guide" title="Guia">
           <GuideApp />
         </Window>
+      )}
+      {welcome && !anyOpen && (
+        <div className="notif" role="status">
+          <div className="notif-icon">📖</div>
+          <div className="notif-body">
+            <b>Bem-vindo(a) ao DevOps Lab</b>
+            <span>Explore o computador. Os apps ficam no Dock, lá embaixo. Se ficar perdido(a), o Guia explica cada passo.</span>
+          </div>
+          <button aria-label="Fechar aviso" onClick={() => setWelcome(false)}>×</button>
+        </div>
       )}
       <Dock />
     </div>

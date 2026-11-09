@@ -1,6 +1,7 @@
 // Editor de código no estilo VS Code: barra de atividades, Explorer com status do git,
 // pesquisa, controle de código-fonte, abrir pasta, abertura rápida (Ctrl+P), paleta de comandos
 // e terminal integrado.
+import { useAppCommands } from '../store/appCommands'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { load } from 'js-yaml'
 import { editor } from '../engine/editor'
@@ -450,6 +451,21 @@ export function EditorApp() {
     { label: 'Terminal: Alternar terminal integrado', key: 'Ctrl+`', run: () => setTerm((t) => !t) },
     { label: 'Ir para arquivo...', key: 'Ctrl+P', run: () => setTimeout(() => setQuick('files'), 0) },
   ]
+
+  useAppCommands('editor', {
+    newFile: () => root && setCreating({ kind: 'file', dir: root }),
+    openFolder: () => setPicker(true),
+    openFile: () => root && setQuick('files'),
+    save: () => buf && editor.save(buf.path),
+    saveAll: () => editor.saveAll(),
+    closeFile: () => buf && editor.close(buf.path),
+    closeFolder: () => editor.closeFolder(),
+    palette: () => setQuick('commands'),
+    explorer: () => setView('explorer'),
+    search: () => setView('search'),
+    scm: () => setView('scm'),
+    toggleTerminal: () => setTerm((t) => !t),
+  })
 
   const keys = (e: React.KeyboardEvent) => {
     const mod = e.ctrlKey || e.metaKey

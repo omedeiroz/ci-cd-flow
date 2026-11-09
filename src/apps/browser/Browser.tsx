@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { useAppCommands } from '../../store/appCommands'
 import { useOS } from '../../store/os'
 import { net, loadTodos, callExport, type Service } from '../../engine/node'
 import { actions } from '../../engine/actions'
@@ -295,6 +296,14 @@ export function BrowserApp() {
     flashLoad()
     emit(url, tab.userTab)
   }
+  useAppCommands('browser', {
+    newTab: () => newTab(),
+    closeTab: () => closeTab(active),
+    reload,
+    back: () => move(-1),
+    forward: () => move(1),
+    focusAddress: () => (urlRef.current?.focus(), urlRef.current?.select()),
+  })
 
   useEffect(() => {
     if (!nav.n) return

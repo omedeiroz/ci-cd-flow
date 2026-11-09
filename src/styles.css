@@ -1001,3 +1001,34 @@ select.gh-branch { font: inherit; font-weight: 600; font-size: 13px; color: #1f2
 .start-avatar-label { display: flex; align-items: center; justify-content: space-between; }
 .start-avatar-label button { border: 0; border-radius: 8px; padding: 4px 10px; font-size: 12px; font-weight: 600; color: #fff; cursor: pointer; background: rgba(255,255,255,.14); box-shadow: inset 0 0 0 1px rgba(255,255,255,.22); }
 .start-avatars { grid-template-columns: repeat(auto-fill, minmax(46px, 1fr)); max-height: 170px; overflow-y: auto; padding: 4px; }
+
+/* ---------- menus da barra superior ---------- */
+.menubar .menu-root { position: relative; display: flex; }
+.menubar .logo.on, .menubar .m.on { background: rgba(255,255,255,.22); }
+.menubar .m.app { font-weight: 700; }
+.dropdown { z-index: 9500; }
+.dropdown .item { display: flex; align-items: center; gap: 4px; white-space: nowrap; cursor: default; }
+.dropdown .item .check { width: 14px; flex: none; font-size: 11px; }
+.dropdown .item .label { flex: 1; }
+.dropdown .item .key { margin-left: 24px; font-size: 11px; opacity: .55; }
+.dropdown .item.disabled { color: #a1a1a6; }
+.dropdown .item.disabled:hover { background: transparent; color: #a1a1a6; }
+.dropdown .item.muted { padding-left: 28px; }
+.mb-modal-bg { position: fixed; inset: 0; z-index: 9800; background: rgba(0,0,0,.2); display: grid; place-items: center; text-shadow: none; }
+.mb-modal { width: 380px; max-width: calc(100vw - 32px); padding: 22px 24px 18px; border-radius: 14px; background: rgba(246,246,248,.97); color: #1d1d1f; box-shadow: 0 30px 80px rgba(0,0,0,.35); text-align: center; font-size: 13px; line-height: 1.5; }
+.mb-modal h3 { margin: 6px 0 2px; font-size: 17px; }
+.mb-modal p { margin: 8px 0; }
+.mb-modal .muted { color: #6e6e73; font-size: 12px; }
+.mb-modal-logo { width: 56px; height: 56px; margin: 0 auto; border-radius: 14px; display: grid; place-items: center; color: #fff; background: linear-gradient(135deg, #5e3bdb, #b5456b); }
+.mb-modal-logo svg { width: 30px; height: 30px; }
+.mb-modal table { width: 100%; border-collapse: collapse; text-align: left; margin: 10px 0; font-size: 12px; }
+.mb-modal th { padding: 8px 0 3px; font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: #6e6e73; }
+.mb-modal td { padding: 3px 0; border-top: 1px solid rgba(0,0,0,.06); }
+.mb-modal td:first-child { font-family: 'JetBrains Mono', monospace; white-space: nowrap; padding-right: 12px; }
+.mb-modal button { margin-top: 6px; min-width: 90px; border: 0; border-radius: 7px; padding: 6px 14px; background: var(--accent); color: #fff; font-weight: 600; }
+.notif { position: absolute; top: 38px; right: 14px; z-index: 8000; width: 340px; display: flex; gap: 10px; align-items: flex-start; padding: 12px 12px 12px 14px; border-radius: 14px; background: rgba(246,246,248,.85); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); box-shadow: 0 10px 30px rgba(0,0,0,.25); animation: notif-in .35s ease-out; }
+.notif-icon { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: #fff3d6; font-size: 18px; flex: none; }
+.notif-body { flex: 1; display: flex; flex-direction: column; gap: 2px; font-size: 12.5px; line-height: 1.4; }
+.notif-body span { color: #3a3a3c; }
+.notif button { border: 0; background: transparent; font-size: 18px; line-height: 1; color: #8a8a8e; cursor: pointer; padding: 0 2px; }
+@keyframes notif-in { from { transform: translateX(30px); opacity: 0; } to { transform: none; opacity: 1; } }

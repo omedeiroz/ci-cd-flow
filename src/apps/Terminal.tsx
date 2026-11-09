@@ -4,9 +4,19 @@ import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { currentShell, localFs, localMachine, onCommand, useOS } from '../store/os'
 import { net } from '../engine/node'
+import { useAppCommands } from '../store/appCommands'
 import { C, Shell, type Prompt, type Result } from '../engine/shell'
 
 const nl = (s: string) => s.replace(/\r?\n/g, '\r\n')
+
+/** Tamanho de fonte escolhido em Visualizar › Aumentar/Diminuir. */
+const termFont = () => {
+  try {
+    return Number(localStorage.getItem('devops-lab:term-font')) || 13
+  } catch {
+    return 13
+  }
+}
 
 /** `embedded`: terminal integrado do editor, com sessão própria começando na pasta aberta. */
 export function TerminalApp({ embedded }: { embedded?: { cwd: string } } = {}) {
@@ -18,14 +28,14 @@ export function TerminalApp({ embedded }: { embedded?: { cwd: string } } = {}) {
     sh.onCommand = onCommand
     stackRef.current = [sh]
   }
-  const api = useRef<{ setLine: (t: string) => void; focus: () => void } | null>(null)
+  const api = useRef<{ setLine: (t: string) => void; focus: () => void; term: XTerm; fit: () => void } | null>(null)
   const typeRequest = useOS((s) => s.typeRequest)
   const focused = useOS((s) => s.focused === 'terminal')
 
   useEffect(() => {
     const term = new XTerm({
       fontFamily: '"JetBrains Mono", Menlo, Monaco, Consolas, monospace',
-      fontSize: 13,
+      fontSize: embedded ? 13 : termFont(),
       lineHeight: 1.25,
       cursorBlink: true,
       allowProposedApi: true,
@@ -231,6 +241,8 @@ export function TerminalApp({ embedded }: { embedded?: { cwd: string } } = {}) {
         setLine(t)
       },
       focus: () => term.focus(),
+      term,
+      fit: () => fit.fit(),
     }
     term.focus()
 
@@ -250,6 +262,33 @@ export function TerminalApp({ embedded }: { embedded?: { cwd: string } } = {}) {
       api.current = null
     }
   }, [])
+
+  const font = (d: number) => {
+    const a = api.current
+    if (!a) return
+    const size = d ? Math.max(10, Math.min(22, (a.term.options.fontSize ?? 13) + d)) : 13
+    a.term.options.fontSize = size
+    a.fit()
+    try {
+      localStorage.setItem('devops-lab:term-font', String(size))
+    } catch {
+      /* sem armazenamento */
+    }
+  }
+  useAppCommands(embedded ? null : 'terminal', {
+    copy: () => {
+      const t = api.current?.term.getSelection()
+      if (t) void navigator.clipboard?.writeText(t).catch(() => {})
+    },
+    paste: () => {
+      void navigator.clipboard?.readText().then((t) => (api.current?.term.paste(t), api.current?.focus())).catch(() => {})
+    },
+    selectAll: () => api.current?.term.selectAll(),
+    clear: () => (api.current?.term.input('\x0c'), api.current?.focus()),
+    fontUp: () => font(1),
+    fontDown: () => font(-1),
+    fontReset: () => font(0),
+  })
 
   useEffect(() => {
     if (typeRequest && api.current && !embedded) {

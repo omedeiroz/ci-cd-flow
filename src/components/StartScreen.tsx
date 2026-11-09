@@ -8,7 +8,7 @@ import { LogoMark } from './Icons'
 
 type View = 'home' | 'load' | 'new' | 'missions'
 
-export const VERSION_LABEL = 'versão 0.11'
+export const VERSION_LABEL = 'versão 0.12'
 
 const when = (ms: number) => {
   const s = Math.round((Date.now() - ms) / 1000)
