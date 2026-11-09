@@ -33,6 +33,7 @@ export type PullRequest = {
   merged?: { commits: Commit[]; from: Tree; to: Tree } // retrato do que foi mesclado (o branch pode ser apagado depois)
 }
 export type Protection = { requirePr: boolean; approvals: number; requireChecks: boolean }
+export type Environment = { secrets: Record<string, { value: string; updated: number }>; reviewers: string[]; created: number }
 export type RemoteRepo = {
   owner: string
   name: string
@@ -46,6 +47,7 @@ export type RemoteRepo = {
   branches?: Record<string, Commit[]> // branches além do padrão (o padrão fica em `commits`)
   pulls?: PullRequest[]
   protection?: Record<string, Protection>
+  environments?: Record<string, Environment>
 }
 
 export type Token = { id: string; note: string; value: string; scopes: string[]; created: number; expires: string }
@@ -454,6 +456,45 @@ ${pr.title}`, u?.name ?? login, u?.email ?? `${login}@users.noreply.github.sim`)
   },
   deleteSecret(key: string, name: string) {
     delete repos[key].secrets[name]
+    emit()
+  },
+
+  // ---------- environments (ambientes de deploy) ----------
+  environments(key: string): Record<string, Environment> {
+    return repos[key]?.environments ?? {}
+  },
+  environment(key: string, name: string): Environment | undefined {
+    return repos[key]?.environments?.[name]
+  },
+  createEnvironment(key: string, name: string): string | null {
+    const r = repos[key]
+    if (!r) return 'Repositório não encontrado.'
+    const n = name.trim()
+    if (!/^[\w.-]+$/.test(n)) return 'Use apenas letras, números, ponto, hífen e _.'
+    if (r.environments?.[n]) return 'Já existe um environment com esse nome.'
+    r.environments = { ...(r.environments ?? {}), [n]: { secrets: {}, reviewers: [], created: Date.now() } }
+    emit()
+    return null
+  },
+  deleteEnvironment(key: string, name: string) {
+    const r = repos[key]
+    if (!r?.environments?.[name]) return
+    const rest = { ...r.environments }
+    delete rest[name]
+    r.environments = rest
+    emit()
+  },
+  setEnvSecret(key: string, env: string, name: string, value: string | null) {
+    const e = repos[key]?.environments?.[env]
+    if (!e) return
+    if (value === null) delete e.secrets[name]
+    else e.secrets[name] = { value, updated: Date.now() }
+    emit()
+  },
+  setEnvReviewers(key: string, env: string, reviewers: string[]) {
+    const e = repos[key]?.environments?.[env]
+    if (!e) return
+    e.reviewers = [...new Set(reviewers)]
     emit()
   },
 

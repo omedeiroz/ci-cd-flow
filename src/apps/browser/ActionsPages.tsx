@@ -4,7 +4,7 @@ import { actions, type JobRun, type Run, type StepRun } from '../../engine/actio
 import { github, type RemoteRepo } from '../../engine/github'
 import { useOS } from '../../store/os'
 import { AnimeAvatar, GhostAvatar } from '../../components/AnimeAvatar'
-import { BranchesSettings } from './PullPages'
+import { BranchesSettings, EnvironmentsSettings } from './PullPages'
 
 const go = (u: string) => useOS.getState().openBrowser(`https://github.sim${u}`)
 const ago = (ms: number) => {
@@ -21,6 +21,7 @@ type Status = { status: string; conclusion?: string }
 export function StatusIcon({ s, size = 16 }: { s: Status | undefined; size?: number }) {
   if (!s) return null
   const st = { width: size, height: size, fontSize: size * 0.7 }
+  if (s.status === 'waiting') return <span className="ci-ic wait" style={st} title="Esperando aprovação">⏸</span>
   if (s.status !== 'completed' && s.status !== 'done') {
     if (s.status === 'in_progress' || s.status === 'running') return <span className="ci-ic run" style={st} title="Em andamento" />
     return <span className="ci-ic queued" style={st} title="Na fila" />
@@ -111,7 +112,7 @@ export function ActionsList({ repo }: { repo: RemoteRepo }) {
               <div key={r.id} className="ci-run" onClick={() => go(`/${key}/actions/runs/${r.id}`)}>
                 <StatusIcon s={r} />
                 <div className="ci-run-main">
-                  <b className="gh-link">{r.commit.message}</b>
+                  <b className="gh-link">{r.commit.message.split('\n')[0]}</b>
                   <div className="gh-muted">
                     <b>{r.workflow}</b> #{r.number}:{' '}
                     {r.event === 'push' ? (
@@ -170,13 +171,29 @@ function JobView({ job }: { job: JobRun }) {
       <div className="ci-job-head">
         <h3>{job.name}</h3>
         <span className="gh-muted">
-          {job.conclusion === 'skipped'
+          {job.status === 'waiting'
+            ? `Esperando aprovação para fazer deploy em ${job.environment}`
+            : job.review?.state === 'rejected'
+              ? `Deploy rejeitado por ${job.review.by}${job.review.comment ? `: "${job.review.comment}"` : ''}`
+              : job.conclusion === 'skipped'
             ? 'Job ignorado (um job do qual ele depende não terminou com sucesso)'
             : job.status === 'queued'
               ? 'Aguardando um runner…'
               : `${job.conclusion === 'success' ? 'concluído com sucesso' : job.conclusion === 'failure' ? 'falhou' : 'em andamento'} · ${dur(job.started, job.ended)}`}
         </span>
       </div>
+      {job.environment && (
+        <div className="ci-env-note">
+          🌐 environment <b>{job.environment}</b>
+          {job.review && (
+            <span className={job.review.state === 'approved' ? 'gh-add' : 'gh-del'}>
+              {' · '}
+              {job.review.state === 'approved' ? 'aprovado' : 'rejeitado'} por {job.review.by}
+              {job.review.comment ? ` — "${job.review.comment}"` : ''}
+            </span>
+          )}
+        </div>
+      )}
       {job.steps.map((s, i) => (
         <StepView key={`${i}-${s.name}`} st={s} defaultOpen={i === focus} />
       ))}
@@ -206,14 +223,15 @@ export function RunView({ repo, id }: { repo: RemoteRepo; id: number }) {
       <main>
         <div className="ci-run-title">
           <StatusIcon s={run} size={22} />
-          <h2>{run.commit.message} <span className="gh-muted">{run.workflow} #{run.number}{run.attempt > 1 ? ` · tentativa ${run.attempt}` : ''}</span></h2>
+          <h2>{run.commit.message.split('\n')[0]} <span className="gh-muted">{run.workflow} #{run.number}{run.attempt > 1 ? ` · tentativa ${run.attempt}` : ''}</span></h2>
           {run.status === 'completed' && !run.error && (
             <button className="gh-btn" onClick={() => actions.rerun(run.id)}>↻ Executar jobs novamente</button>
           )}
         </div>
+        {run.jobs.some((j) => j.status === 'waiting') && <ReviewBanner run={run} />}
         <div className="ci-summary">
           <div><span>Disparado via {EVENT_LABEL[run.event]}</span><b><Actor login={run.actor} /> {run.actor} · {ago(run.created)}</b></div>
-          <div><span>Status</span><b>{run.status === 'completed' ? (run.conclusion === 'success' ? 'Sucesso' : 'Falha') : run.status === 'queued' ? 'Na fila' : 'Em andamento'}</b></div>
+          <div><span>Status</span><b>{run.status === 'completed' ? (run.conclusion === 'success' ? 'Sucesso' : 'Falha') : run.status === 'queued' ? 'Na fila' : run.status === 'waiting' ? 'Esperando aprovação' : 'Em andamento'}</b></div>
           <div><span>Duração total</span><b>{dur(run.created, run.ended)}</b></div>
           <div><span>Commit</span><b><code>{run.commit.hash.slice(0, 7)}</code></b></div>
         </div>
@@ -244,19 +262,61 @@ export function RunView({ repo, id }: { repo: RemoteRepo; id: number }) {
   )
 }
 
+function ReviewBanner({ run }: { run: Run }) {
+  const [open, setOpen] = useState(false)
+  const [comment, setComment] = useState('')
+  const [err, setErr] = useState('')
+  const me = github.current()
+  const waiting = run.jobs.filter((j) => j.status === 'waiting')
+  const envs = [...new Set(waiting.map((j) => j.environment!))]
+  const canReview = !!me && envs.every((e) => github.environment(run.repo, e)?.reviewers.includes(me.login))
+  const act = (approve: boolean) => {
+    const e = actions.reviewDeployment(run.id, approve, me!.login, comment.trim())
+    if (e) setErr(e)
+    else setOpen(false)
+  }
+  return (
+    <div className="ci-review">
+      <div className="ci-review-head">
+        <span>
+          ⏸ <b>{envs.join(', ')}</b> está esperando revisão{canReview ? '. Você pode aprovar.' : '.'}
+        </span>
+        {canReview && <button className="gh-btn" onClick={() => setOpen((o) => !o)}>Revisar deployments</button>}
+      </div>
+      {open && (
+        <div className="ci-review-box">
+          {envs.map((e) => (
+            <label key={e} className="gh-check-opt">
+              <input type="checkbox" checked readOnly />
+              <div>
+                <b>{e}</b>
+                <div className="gh-muted">Revisores: {github.environment(run.repo, e)?.reviewers.join(', ')}</div>
+              </div>
+            </label>
+          ))}
+          <textarea className="gh-comment" value={comment} onChange={(e) => setComment(e.target.value)} rows={2} placeholder="Deixe um comentário (opcional)" aria-label="Comentário da revisão" />
+          {err && <div className="gh-flash error small">{err}</div>}
+          <div className="gh-hero-cta left" style={{ marginTop: 0 }}>
+            <button className="gh-btn danger" onClick={() => act(false)}>Rejeitar</button>
+            <button className="gh-btn green" onClick={() => act(true)}>Aprovar e implantar</button>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
 // ---------- Configurações > Secrets ----------
 
-type SetTab = 'secrets' | 'pages' | 'branches'
+type SetTab = 'secrets' | 'pages' | 'branches' | 'environments'
 export function SecretsPage({ repo, initial = 'secrets' }: { repo: RemoteRepo; initial?: SetTab }) {
   const [tab, setTab] = useState<SetTab>(initial)
   useEffect(() => setTab(initial), [initial])
-  if (tab === 'branches')
+  if (tab === 'branches' || tab === 'environments')
     return (
       <div className="gh-settings">
-        <SettingsNav tab="branches" setTab={setTab} />
-        <main>
-          <BranchesSettings repo={repo} />
-        </main>
+        <SettingsNav tab={tab} setTab={setTab} />
+        <main>{tab === 'branches' ? <BranchesSettings repo={repo} /> : <EnvironmentsSettings repo={repo} />}</main>
       </div>
     )
   return tab === 'pages' ? <PagesSettings repo={repo} setTab={setTab} /> : <SecretsInner repo={repo} setTab={setTab} />
@@ -269,6 +329,7 @@ function SettingsNav({ tab, setTab }: { tab: SetTab; setTab: (t: SetTab) => void
       <div className="side">Colaboradores</div>
       <div className={`side ${tab === 'branches' ? 'on' : ''}`} onClick={() => setTab('branches')}>Branches</div>
       <div className="side-group">Código e automação</div>
+      <div className={`side ${tab === 'environments' ? 'on' : ''}`} onClick={() => setTab('environments')}>Environments</div>
       <div className={`side ${tab === 'pages' ? 'on' : ''}`} onClick={() => setTab('pages')}>Pages</div>
       <div className="side-group">Segurança</div>
       <div className={`side ${tab === 'secrets' ? 'on' : ''}`} onClick={() => setTab('secrets')}>Secrets e variáveis › Actions</div>

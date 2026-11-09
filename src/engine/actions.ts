@@ -17,7 +17,9 @@ export type JobRun = {
   matrix?: Record<string, string>
   name: string
   needs: string[]
-  status: 'queued' | 'in_progress' | 'completed'
+  status: 'queued' | 'waiting' | 'in_progress' | 'completed'
+  environment?: string
+  review?: { state: 'approved' | 'rejected'; by: string; at: number; comment: string }
   conclusion?: Conclusion
   steps: StepRun[]
   started?: number
@@ -32,7 +34,7 @@ export type Run = {
   file: string
   commit: Commit
   actor: string
-  status: 'queued' | 'in_progress' | 'completed'
+  status: 'queued' | 'waiting' | 'in_progress' | 'completed'
   conclusion?: Conclusion
   jobs: JobRun[]
   created: number
@@ -55,6 +57,7 @@ type JobDef = {
   env?: Record<string, unknown>
   permissions?: Permissions
   strategy?: { matrix?: Record<string, unknown> }
+  environment?: string | { name?: string; url?: string }
 }
 type WorkflowDef = { name?: string; on?: unknown; jobs?: Record<string, JobDef>; env?: Record<string, unknown>; permissions?: Permissions }
 
@@ -115,6 +118,8 @@ export const actions = {
     emit()
     void execute(r, def)
   },
+  reviewDeployment: (runId: number, approve: boolean, login: string, comment = '') => reviewDeployment(runId, approve, login, comment),
+  deployments: (repo: string) => deployments(repo),
   subscribe(fn: () => void) {
     listeners.add(fn)
     return () => listeners.delete(fn)
@@ -155,7 +160,8 @@ function buildJobs(def: WorkflowDef): JobRun[] {
         name = name.replace(/\$\{\{\s*matrix\.(\w[\w-]*)\s*\}\}/g, (_, k: string) => m[k] ?? '')
         if (name === (j.name ?? key)) name = `${name} (${Object.values(m).join(', ')})`
       }
-      return { key: m ? `${key}-${Object.values(m).join('-')}` : key, defKey: key, matrix: m, name, needs, status: 'queued' as const, steps: [] }
+      const environment = typeof j.environment === 'string' ? j.environment : j.environment?.name
+      return { key: m ? `${key}-${Object.values(m).join('-')}` : key, defKey: key, matrix: m, name, needs, status: 'queued' as const, steps: [], environment }
     })
   })
 }
@@ -270,6 +276,8 @@ setInterval(() => {
 }, 120_000)
 
 function notifyFailure(run: Run) {
+  // deploy rejeitado de propósito não é falha a notificar
+  if (run.jobs.filter((j) => j.conclusion === 'failure').every((j) => j.review?.state === 'rejected') && !run.error) return
   if (run.event === 'pull_request' && github.user(run.actor)?.bot) return
   const sha = run.commit.hash.slice(0, 7)
   mail.send({
@@ -288,14 +296,90 @@ function notifyFailure(run: Run) {
   })
 }
 
+// ---------- environments: aprovação de deploy ----------
+
+const approvals = new Map<string, (ok: boolean) => void>()
+const gateKey = (run: Run, job: JobRun) => `${run.id}:${job.key}`
+
+/** Se o environment exige revisores, o job espera alguém aprovar. Devolve false se for rejeitado. */
+function gate(run: Run, job: JobRun): Promise<boolean> {
+  const env = job.environment!
+  if (!github.environment(run.repo, env)) github.createEnvironment(run.repo, env) // o GitHub cria o environment na primeira vez
+  const reviewers = github.environment(run.repo, env)?.reviewers ?? []
+  if (!reviewers.length) return Promise.resolve(true)
+  const first = job.status !== 'waiting'
+  job.status = 'waiting'
+  run.status = 'waiting'
+  emit()
+  if (first) notifyReview(run, job, reviewers)
+  return new Promise((resolve) => approvals.set(gateKey(run, job), resolve))
+}
+
+function notifyReview(run: Run, job: JobRun, reviewers: string[]) {
+  const me = github.student()
+  if (!me || !reviewers.includes(me.login)) return
+  mail.send({
+    from: 'GitHub',
+    fromAddr: 'notifications@github.sim',
+    logo: 'github',
+    to: me.email,
+    subject: `[${run.repo}] Deployment review pending: ${job.environment}`,
+    preview: `${run.workflow} #${run.number} está esperando aprovação para fazer deploy em ${job.environment}`,
+    body: [
+      { kind: 'p', text: `⏸ O job "${job.name}" está esperando a sua aprovação para fazer deploy no environment ${job.environment}.` },
+      { kind: 'kv', rows: [['Repositório', run.repo], ['Commit', `${run.commit.hash.slice(0, 7)} ${run.commit.message.split('\n')[0]}`], ['Workflow', `${run.workflow} #${run.number}`]] },
+      { kind: 'button', label: 'Revisar deployments', url: `https://github.sim/${run.repo}/actions/runs/${run.id}` },
+    ],
+  })
+}
+
+/** Botão "Review deployments": aprova ou rejeita os jobs que esperam. */
+function reviewDeployment(runId: number, approve: boolean, login: string, comment = ''): string | null {
+  const run = runs.find((r) => r.id === runId)
+  if (!run) return 'Execução não encontrada.'
+  const waiting = run.jobs.filter((j) => j.status === 'waiting')
+  if (!waiting.length) return 'Nenhum deploy esperando revisão.'
+  for (const job of waiting) {
+    const reviewers = github.environment(run.repo, job.environment!)?.reviewers ?? []
+    if (!reviewers.includes(login)) return `Você não é revisor(a) do environment ${job.environment}.`
+  }
+  const orphan = waiting.some((j) => !approvals.has(gateKey(run, j)))
+  for (const job of waiting) {
+    job.review = { state: approve ? 'approved' : 'rejected', by: login, at: Date.now(), comment }
+    job.status = approve ? 'queued' : 'completed'
+    const resolve = approvals.get(gateKey(run, job))
+    approvals.delete(gateKey(run, job))
+    if (resolve) resolve(approve)
+    else if (!approve) ((job.conclusion = 'failure'), (job.ended = Date.now()))
+  }
+  if (orphan) {
+    // sem execução viva (a página foi recarregada enquanto esperava): retoma
+    const def = defs.get(run.id)
+    if (def && run.status !== 'completed') void execute(run, def)
+  }
+  emit()
+  return null
+}
+
+/** Último deploy de cada environment (para a página de environments). */
+function deployments(repo: string) {
+  const out: { env: string; run: Run; job: JobRun }[] = []
+  for (const run of runs.filter((r) => r.repo === repo).sort((a, b) => b.id - a.id))
+    for (const job of run.jobs) if (job.environment && (job.status !== 'completed' || job.conclusion !== 'skipped')) out.push({ env: job.environment, run, job })
+  return out
+}
+
 // ---------- execução ----------
 
 async function execute(run: Run, def: WorkflowDef) {
-  await sleep(1200) // "Waiting for a runner to pick up this job..."
-  run.status = 'in_progress'
+  if (run.status === 'queued') {
+    await sleep(1200) // "Waiting for a runner to pick up this job..."
+    run.status = 'in_progress'
+  }
   emit()
-  const done = new Set<string>()
-  const pending = [...run.jobs]
+  // retomável: jobs já concluídos (antes de recarregar a página) contam como prontos
+  const done = new Set<string>(run.jobs.filter((j) => j.status === 'completed').map((j) => j.key))
+  const pending = run.jobs.filter((j) => j.status !== 'completed')
   while (pending.length) {
     const ready = pending.filter((j) => run.jobs.filter((x) => j.needs.includes(x.defKey)).every((d) => done.has(d.key)))
     if (!ready.length) break
@@ -309,8 +393,13 @@ async function execute(run: Run, def: WorkflowDef) {
         } else if (def.jobs![job.defKey].if && !evalIf(def.jobs![job.defKey].if!, run)) {
           job.status = 'completed'
           job.conclusion = 'skipped'
+        } else if (job.environment && !(await gate(run, job))) {
+          job.status = 'completed'
+          job.conclusion = 'failure'
+          job.ended = Date.now()
         } else await runJob(run, job, def.jobs![job.defKey], def)
         done.add(job.key)
+        if (!run.jobs.some((j) => j.status === 'waiting') && run.status === 'waiting') run.status = 'in_progress'
         emit()
       }),
     )
@@ -376,7 +465,8 @@ async function runJob(run: Run, job: JobRun, def: JobDef, wf: WorkflowDef) {
   job.status = 'in_progress'
   job.started = Date.now()
   const runToken = github.createRunToken(run.actor, tokenScopes(def.permissions ?? wf.permissions))
-  const secrets: Record<string, { value: string; updated: number }> = { ...(github.get(run.repo)?.secrets ?? {}), GITHUB_TOKEN: { value: runToken, updated: Date.now() } }
+  const envSecrets = job.environment ? (github.environment(run.repo, job.environment)?.secrets ?? {}) : {}
+  const secrets: Record<string, { value: string; updated: number }> = { ...(github.get(run.repo)?.secrets ?? {}), ...envSecrets, GITHUB_TOKEN: { value: runToken, updated: Date.now() } }
   const secretValues = Object.values(secrets).map((s) => s.value.trim()).filter((v) => v.length >= 4)
   const mask = (s: string) => secretValues.reduce((acc, v) => acc.split(v).join('***'), s)
   const expr = (s: string) =>
@@ -596,9 +686,11 @@ export function actionsDump() {
   return { runs: kept, defs: [...defs.entries()].filter(([id]) => kept.some((r) => r.id === id)), pages, numbers, seq }
 }
 export function actionsLoad(d: ReturnType<typeof actionsDump>) {
-  // execuções interrompidas pelo recarregamento viram "canceladas"
+  // execuções interrompidas pelo recarregamento viram "canceladas",
+  // exceto as que só esperavam aprovação de deploy: essas continuam esperando
+  const resumable = (r: Run) => r.status === 'waiting' && r.jobs.every((j) => j.status === 'completed' || j.status === 'waiting' || j.status === 'queued')
   for (const r of d.runs)
-    if (r.status !== 'completed') {
+    if (r.status !== 'completed' && !resumable(r)) {
       r.status = 'completed'
       r.conclusion = 'cancelled'
       r.ended = Date.now()
@@ -617,4 +709,6 @@ export function actionsLoad(d: ReturnType<typeof actionsDump>) {
   for (const k of Object.keys(numbers)) delete numbers[k]
   Object.assign(numbers, d.numbers)
   seq = d.seq
+  approvals.clear()
+  for (const r of runs) if (resumable(r) && defs.get(r.id)) void execute(r, defs.get(r.id)!)
 }

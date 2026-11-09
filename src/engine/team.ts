@@ -39,11 +39,15 @@ function notify(pr: PullRequest, subject: string, text: string) {
 function review(n: number) {
   const pr = github.pull(TEAM_REPO, n)
   if (!pr || pr.state !== 'open') return
-  const readme = github.branchHead(TEAM_REPO, pr.head)?.tree['README.md']
-  if (documents(readme)) {
+  const tree = github.branchHead(TEAM_REPO, pr.head)?.tree ?? {}
+  const base = github.branchHead(TEAM_REPO, pr.base)?.tree ?? {}
+  const readme = tree['README.md']
+  // só pede documentação quando o PR cria a rota nova
+  const addsRoute = /\/todos\/pendentes/.test(tree['src/server.js'] ?? '') && !/\/todos\/pendentes/.test(base['src/server.js'] ?? '')
+  if (documents(readme) || !addsRoute) {
     if (st.approved.includes(n)) return
     st.approved.push(n)
-    const body = st.reviewed.includes(n) ? 'Agora sim, endpoint documentado. LGTM 👍' : 'Código e teste ok, e já veio documentado. LGTM 👍'
+    const body = st.reviewed.includes(n) ? 'Agora sim, endpoint documentado. LGTM 👍' : addsRoute ? 'Código e teste ok, e já veio documentado. LGTM 👍' : 'Revisei as mudanças. LGTM 👍'
     github.review(TEAM_REPO, n, { by: REVIEWER, state: 'APPROVED', body })
     notify(pr, 'aprovou estas alterações.', body)
   } else if (!st.reviewed.includes(n)) {
@@ -102,6 +106,10 @@ export const team = {
     st.active = true
   },
   state: (): Readonly<TeamState> => st,
+  /** Ao pular missões: o PR da Bulma já "aconteceu". */
+  markBulmaDone() {
+    st.bulma = 'merged'
+  },
   /** Retoma o que estava agendado quando a página foi recarregada. */
   resume() {
     if (!st.active) return

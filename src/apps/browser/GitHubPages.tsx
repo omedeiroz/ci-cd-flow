@@ -7,7 +7,7 @@ import { AnimeAvatar, AVATAR_COUNT, GhostAvatar } from '../../components/AnimeAv
 import { Markdown } from './markdown'
 import { ActionsList, RunView, SecretsPage, StatusIcon, lastRunStatus } from './ActionsPages'
 import { docker } from '../../engine/docker'
-import { Compare, PullsList, PullView, PushedBanner } from './PullPages'
+import { Compare, DeploymentsBox, PullsList, PullView, PushedBanner } from './PullPages'
 
 const go = (u: string) => useOS.getState().openBrowser(u.startsWith('http') ? u : `https://github.sim${u}`)
 
@@ -724,6 +724,7 @@ function CodeView({ repo, dir, file, branch }: { repo: RemoteRepo; dir: string; 
             })}
           </div>
           {!dir && <PackagesBox repo={repo} />}
+          {!dir && <DeploymentsBox repo={repo} />}
           {!dir && head.tree['README.md'] && (
             <div className="gh-box gh-readme">
               <div className="gh-box-head"><b>📖 README</b></div>
@@ -878,7 +879,7 @@ export function GitHubPage({ path, query }: { path: string; query: URLSearchPara
       <RequireLogin>
         <Frame>
           <RepoHeader repo={repo} tab="settings" />
-          {ok ? <SecretsPage repo={repo} initial={parts[3] === 'branches' ? 'branches' : parts[3] === 'pages' ? 'pages' : 'secrets'} /> : <div className="gh-center"><h2>404 · Somente administradores do repositório podem ver as configurações.</h2></div>}
+          {ok ? <SecretsPage repo={repo} initial={parts[3] === 'branches' ? 'branches' : parts[3] === 'environments' ? 'environments' : parts[3] === 'pages' ? 'pages' : 'secrets'} /> : <div className="gh-center"><h2>404 · Somente administradores do repositório podem ver as configurações.</h2></div>}
         </Frame>
       </RequireLogin>
     )

@@ -900,3 +900,14 @@ select.gh-branch { font: inherit; font-weight: 600; font-size: 13px; color: #1f2
 .gh-check-opt { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; font-size: 14px; }
 .gh-check-opt input { margin-top: 3px; }
 .gh-field.indent { margin-left: 26px; max-width: 220px; }
+.ci-ic.wait { background: #bf8700; font-size: 9px !important; font-weight: 700; }
+.ci-review { border: 1px solid #d4a72c; background: #fff8c5; border-radius: 8px; margin: 0 0 14px; }
+.ci-review-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; font-size: 14px; }
+.ci-review-box { border-top: 1px solid #d4a72c66; background: #fff; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; border-radius: 0 0 8px 8px; }
+.ci-review-box .gh-comment { margin: 0; width: 100%; }
+.ci-env-note { font-size: 13px; color: #59636e; padding: 8px 14px; border-bottom: 1px solid #30363d33; }
+.gh-env-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 12px 14px; border-top: 1px solid #eef1f4; }
+.gh-env-row:first-child { border-top: 0; }
+.gh-env-row .gh-link { font-weight: 600; }
+.gh-deploys { display: flex; flex-direction: column; gap: 6px; padding: 10px 14px; font-size: 13px; }
+.gh-deploys > div { display: flex; align-items: center; gap: 8px; }

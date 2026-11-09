@@ -29,6 +29,9 @@ export type Instance = {
   hostKey: string
 }
 
+/** Nome da instância de staging criada na Missão 8. */
+export const STAGING_NAME = 'todo-api-staging'
+
 export const AMIS: Ami[] = [
   { id: 'ami-0a1b2c3d4e5f60789', label: 'Ubuntu Server 24.04 LTS (HVM), SSD Volume Type', short: 'Ubuntu', os: 'ubuntu', user: 'ubuntu', desc: 'Ubuntu 24.04 LTS · 64 bits (x86) · Qualificado para o nível gratuito' },
   { id: 'ami-0f9e8d7c6b5a40321', label: 'Amazon Linux 2023 AMI', short: 'Amazon Linux', os: 'amazon', user: 'ec2-user', desc: 'Amazon Linux 2023 · kernel 6.1 · Qualificado para o nível gratuito' },

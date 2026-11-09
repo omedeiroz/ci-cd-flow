@@ -89,5 +89,6 @@ máquina remota).
 - [x] Editor estilo VS Code: barra de atividades, Explorer com status do git, pesquisa, controle de código-fonte, abrir pasta, Ctrl+P, paleta de comandos, terminal integrado
 - [x] Missão 6: pipeline com Docker: GITHUB_TOKEN e permissions, imagem com tag do commit, deploy com docker pull, rollback
 - [x] Missão 7: branches e pull requests: proteção da main, `git switch -c`, `push -u`, CI em pull requests, revisão de código, conflito com merge de 3 vias, merge e limpeza
+- [x] Missão 8: staging e produção: servidor de staging, environments com secrets próprios, teste de fumaça, aprovação obrigatória para produção e deploy rejeitado
 - [x] Missão 5: Docker: Dockerfile, .dockerignore, build com cache, run/ps/logs/exec, registry ghcr.sim (login/tag/push), Docker no servidor (grupo docker, --restart)
 - [x] Missão 4: editor de código, workflow do GitHub Actions (CI), teste quebrado de propósito, secrets e job de deploy via SSH na EC2 (CD)

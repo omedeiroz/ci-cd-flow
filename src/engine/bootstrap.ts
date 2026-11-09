@@ -4,9 +4,26 @@ import type { Shell } from './shell'
 import { Shell as ShellClass } from './shell'
 import { github } from './github'
 import { allRepos, readConfig, saveCredentials } from './git'
-import { AMIS, aws } from './aws'
+import { AMIS, aws, STAGING_NAME } from './aws'
 import { net } from './node'
-import { CI_YML, DEPLOY_YML, DOCKER_CI_YML } from './missions'
+import { CI_YML, DEPLOY_YML, DOCKER_CI_YML, FEATURE_ROUTE, FEATURE_TEST, FEATURE_TODOS, PR_CI_YML } from './missions'
+import { team } from './team'
+
+export { STAGING_NAME }
+
+/** Servidor de staging da Missão 8: mesma chave e security group da produção, Docker instalado, nada rodando. */
+export function provisionStaging() {
+  const existing = aws.instances().find((i) => i.name === STAGING_NAME && i.state !== 'terminated')
+  if (existing) return existing
+  const prod = aws.instances().find((i) => i.name !== STAGING_NAME && i.state !== 'terminated')
+  const pair = prod?.keyName ?? aws.keyPairs()[0]?.name
+  if (!prod || !pair) return null
+  const inst = aws.launch({ name: STAGING_NAME, ami: AMIS[0], type: 't2.micro', keyName: pair, sgId: prod.sgId })
+  aws.forceReady(inst)
+  const sh = new ShellClass(inst.fs, inst.ami.user, 'staging', inst.machine)
+  sh.execute('sudo apt update && sudo apt install -y docker.io && sudo usermod -aG docker ubuntu')
+  return inst
+}
 
 export function prepareMission(idx: number, fs: VFS, sh: Shell) {
   if (!fs.isDir(`${fs.home}/projetos`)) fs.mkdir(`${fs.home}/projetos`, true)
@@ -94,4 +111,22 @@ export function prepareMission(idx: number, fs: VFS, sh: Shell) {
     fs.write(`${root}/.github/workflows/ci.yml`, DOCKER_CI_YML)
     ws.execute('git commit -am "ci: build e deploy com Docker" && git push')
   }
+
+  if (idx < 7) return
+
+  // Missão 7: CI em pull requests, funcionalidade de pendentes mesclada e main protegida
+  if (root && !(github.head(key)?.tree['src/todos.js'] ?? '').includes('pendingCount')) {
+    github.setProtection(key, 'main', null)
+    ws.execute('git switch main')
+    ws.execute('git pull --no-rebase')
+    fs.write(`${root}/.github/workflows/ci.yml`, PR_CI_YML)
+    const add = (f: string, c: string) => fs.write(`${root}/${f}`, fs.read(`${root}/${f}`) + c)
+    add('src/todos.js', FEATURE_TODOS)
+    add('tests/todos.test.js', FEATURE_TEST)
+    add('src/server.js', FEATURE_ROUTE)
+    fs.write(`${root}/README.md`, fs.read(`${root}/README.md`).replace(/(- GET \/health[^\n]*\n)/, '$1- GET /todos/pendentes — quantidade de tarefas pendentes\n'))
+    ws.execute('git add . && git commit -m "feat: contador de tarefas pendentes" && git push')
+  }
+  team.markBulmaDone()
+  if (!github.protection(key, 'main')) github.setProtection(key, 'main', { requirePr: true, approvals: 1, requireChecks: true })
 }

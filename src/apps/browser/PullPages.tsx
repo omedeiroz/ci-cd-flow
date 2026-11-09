@@ -718,3 +718,217 @@ export function BranchesSettings({ repo }: { repo: RemoteRepo }) {
     </>
   )
 }
+
+// ---------- Configurações > Environments ----------
+
+export function EnvironmentsSettings({ repo }: { repo: RemoteRepo }) {
+  const key = keyOf(repo)
+  const envs = github.environments(key)
+  const [sel, setSel] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  const [name, setName] = useState('')
+  const [err, setErr] = useState('')
+  if (sel && envs[sel]) return <EnvironmentPage repo={repo} name={sel} back={() => setSel(null)} />
+  const last = (env: string) => actions.deployments(key).find((d) => d.env === env)
+  return (
+    <>
+      <div className="gh-set-head">
+        <h2>Environments</h2>
+        {!creating && <button className="gh-btn green" onClick={() => (setCreating(true), setName(''), setErr(''))}>Novo environment</button>}
+      </div>
+      <p className="gh-muted">
+        Environments são destinos de deploy (por exemplo, <code>staging</code> e <code>production</code>), cada um com seus secrets e regras de proteção. Um job usa um environment com{' '}
+        <code>environment: nome</code>.
+      </p>
+      {creating && (
+        <form
+          className="gh-box gh-pr-form-in"
+          onSubmit={(e) => {
+            e.preventDefault()
+            const r = github.createEnvironment(key, name)
+            if (r) return setErr(r)
+            setCreating(false)
+            setSel(name.trim())
+          }}
+        >
+          <label className="gh-field">
+            <span>Nome *</span>
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="ex: staging" aria-label="Nome do environment" autoFocus />
+          </label>
+          {err && <div className="gh-flash error small">{err}</div>}
+          <div className="gh-hero-cta left" style={{ marginTop: 0 }}>
+            <button className="gh-btn green" disabled={!name.trim()}>Configurar environment</button>
+            <button type="button" className="gh-btn" onClick={() => setCreating(false)}>Cancelar</button>
+          </div>
+        </form>
+      )}
+      <div className="gh-box">
+        {!Object.keys(envs).length && <div className="gh-empty">Nenhum environment ainda.</div>}
+        {Object.entries(envs).map(([n, e]) => {
+          const d = last(n)
+          return (
+            <div key={n} className="gh-env-row">
+              <div>
+                <span className="gh-link" onClick={() => setSel(n)}>{n}</span>
+                <div className="gh-muted">
+                  {[e.reviewers.length && `${e.reviewers.length} revisor${e.reviewers.length > 1 ? 'es' : ''} obrigatório${e.reviewers.length > 1 ? 's' : ''}`, Object.keys(e.secrets).length && `${Object.keys(e.secrets).length} secret${Object.keys(e.secrets).length > 1 ? 's' : ''}`]
+                    .filter(Boolean)
+                    .join(' · ') || 'sem regras'}
+                </div>
+              </div>
+              <span className="gh-muted">
+                {d ? (
+                  <>
+                    <StatusIcon s={d.job} size={13} /> último deploy {ago(d.job.ended ?? d.run.created)} · <code>{d.run.commit.hash.slice(0, 7)}</code>
+                  </>
+                ) : (
+                  'nenhum deploy'
+                )}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+    </>
+  )
+}
+
+function EnvironmentPage({ repo, name, back }: { repo: RemoteRepo; name: string; back: () => void }) {
+  const key = keyOf(repo)
+  const env = github.environment(key, name)!
+  const [reqReview, setReqReview] = useState(env.reviewers.length > 0)
+  const [reviewers, setReviewers] = useState<string[]>(env.reviewers)
+  const [saved, setSaved] = useState(false)
+  const [secretName, setSecretName] = useState('')
+  const [secretValue, setSecretValue] = useState('')
+  const [adding, setAdding] = useState<string | null>(null)
+  const [err, setErr] = useState('')
+  const people = repo.collaborators
+  const saveSecret = () => {
+    const n = (adding || secretName).trim().toUpperCase()
+    if (!/^[A-Z_][A-Z0-9_]*$/.test(n)) return setErr('O nome pode ter apenas letras, números e _ e não pode começar com número.')
+    if (!secretValue.trim()) return setErr('O valor do secret não pode ficar vazio.')
+    github.setEnvSecret(key, name, n, secretValue)
+    setAdding(null)
+    setSecretName('')
+    setSecretValue('')
+    setErr('')
+  }
+  return (
+    <>
+      <div className="gh-link small" onClick={back}>← Environments</div>
+      <div className="gh-set-head"><h2>Environments / {name}</h2></div>
+
+      <h3 className="gh-h">Regras de proteção do deploy</h3>
+      <div className="gh-rule">
+        <label className="gh-check-opt">
+          <input type="checkbox" checked={reqReview} onChange={(e) => (setReqReview(e.target.checked), setSaved(false))} />
+          <div>
+            <b>Revisores obrigatórios</b>
+            <div className="gh-muted">Os jobs que usam este environment esperam uma das pessoas abaixo aprovar antes de rodar.</div>
+          </div>
+        </label>
+        {reqReview && (
+          <div className="gh-field indent" style={{ maxWidth: 360 }}>
+            <span>Quem pode aprovar</span>
+            {people.map((p) => (
+              <label key={p} className="gh-check-opt">
+                <input
+                  type="checkbox"
+                  checked={reviewers.includes(p)}
+                  onChange={(e) => (setReviewers((r) => (e.target.checked ? [...r, p] : r.filter((x) => x !== p))), setSaved(false))}
+                />
+                <span>
+                  <Who login={p} size={16} /> {p}
+                </span>
+              </label>
+            ))}
+          </div>
+        )}
+        <div className="gh-hero-cta left" style={{ marginTop: 0 }}>
+          <button
+            className="gh-btn green"
+            onClick={() => {
+              github.setEnvReviewers(key, name, reqReview ? reviewers : [])
+              setSaved(true)
+            }}
+          >
+            Salvar regras de proteção
+          </button>
+          {saved && <span className="gh-add">✓ Salvo</span>}
+        </div>
+      </div>
+
+      <div className="gh-set-head">
+        <h3>Environment secrets</h3>
+        {adding === null && <button className="gh-btn" onClick={() => (setAdding(''), setSecretValue(''), setErr(''))}>Adicionar secret</button>}
+      </div>
+      <p className="gh-muted">Só os jobs que usam este environment enxergam estes secrets. Se o nome for igual a um secret do repositório, este vale.</p>
+      {adding !== null && (
+        <form
+          className="gh-box gh-pr-form-in"
+          onSubmit={(e) => {
+            e.preventDefault()
+            saveSecret()
+          }}
+        >
+          <label className="gh-field">
+            <span>Nome *</span>
+            <input value={adding || secretName} disabled={!!adding} onChange={(e) => setSecretName(e.target.value.toUpperCase().replace(/\s/g, '_'))} placeholder="EX: EC2_HOST" aria-label="Nome do secret do environment" />
+          </label>
+          <label className="gh-field">
+            <span>Valor *</span>
+            <textarea className="gh-comment" style={{ margin: 0, width: '100%' }} value={secretValue} onChange={(e) => setSecretValue(e.target.value)} rows={3} aria-label="Valor do secret do environment" />
+          </label>
+          {err && <div className="gh-flash error small">{err}</div>}
+          <div className="gh-hero-cta left" style={{ marginTop: 0 }}>
+            <button className="gh-btn green">Salvar secret</button>
+            <button type="button" className="gh-btn" onClick={() => setAdding(null)}>Cancelar</button>
+          </div>
+        </form>
+      )}
+      <div className="gh-box">
+        {!Object.keys(env.secrets).length && <div className="gh-empty">Este environment não tem secrets.</div>}
+        {Object.entries(env.secrets).map(([n, sec]) => (
+          <div key={n} className="gh-token">
+            <div>
+              🔒 <code><b>{n}</b></code>
+              <div className="gh-muted">Atualizado {ago(sec.updated)}</div>
+            </div>
+            <span>
+              <button className="gh-btn small" onClick={() => (setAdding(n), setSecretValue(''), setErr(''))}>✎ Atualizar</button>{' '}
+              <button className="gh-btn danger small" onClick={() => github.setEnvSecret(key, name, n, null)}>Remover</button>
+            </span>
+          </div>
+        ))}
+      </div>
+      <div className="gh-hero-cta left">
+        <button className="gh-btn danger" onClick={() => (github.deleteEnvironment(key, name), back())}>Excluir environment</button>
+      </div>
+    </>
+  )
+}
+
+/** Caixa "Deployments" na página do repositório. */
+export function DeploymentsBox({ repo }: { repo: RemoteRepo }) {
+  const key = keyOf(repo)
+  const envs = Object.keys(github.environments(key))
+  const all = actions.deployments(key)
+  const rows = envs.map((e) => ({ e, d: all.find((x) => x.env === e) })).filter((x) => x.d)
+  if (!rows.length) return null
+  return (
+    <div className="gh-box">
+      <div className="gh-box-head"><b>🚀 Deployments</b></div>
+      <div className="gh-deploys">
+        {rows.map(({ e, d }) => (
+          <div key={e} className="gh-link" onClick={() => go(`/${key}/actions/runs/${d!.run.id}`)}>
+            <StatusIcon s={d!.job} size={13} /> <b>{e}</b>
+            <span className="gh-muted">
+              {d!.job.status === 'waiting' ? 'esperando aprovação' : d!.job.review?.state === 'rejected' ? 'rejeitado' : ago(d!.job.ended ?? d!.run.created)} · <code>{d!.run.commit.hash.slice(0, 7)}</code>
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}

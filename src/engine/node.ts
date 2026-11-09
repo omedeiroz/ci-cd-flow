@@ -468,6 +468,7 @@ registerCommand('curl', {
       const route = apiRoute(svc, path)
       if (route !== undefined) return ok(route)
       if (path === '/') return ok(`<!DOCTYPE html><html><head><title>${svc.name}</title></head>...`)
+      if (args.some((a) => a === '--fail' || /^-[a-zA-Z]*f/.test(a))) return fail('curl: (22) The requested URL returned error: 404', 22)
       return ok(`Cannot GET ${path}`)
     }
     if (host === 'github.sim') return ok('<!DOCTYPE html><html><head><title>GitHub</title></head>...')

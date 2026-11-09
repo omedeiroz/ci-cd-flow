@@ -4,7 +4,7 @@ import type { CommandEvent } from './shell'
 import { allRepos, aheadBy, findRepo, readConfig, repoStatus } from './git'
 import { github } from './github'
 import { net } from './node'
-import { aws } from './aws'
+import { aws, STAGING_NAME } from './aws'
 import { load } from 'js-yaml'
 import { editor } from './editor'
 import { actions } from './actions'
@@ -18,7 +18,7 @@ export type SimEvent =
   | { kind: 'ui'; name: string }
   | { kind: 'tick' } // algum estado mudou (timer da AWS, convite chegou...)
 export type CheckCtx = { fs: VFS; cwd: string; event: SimEvent; seen: Set<string> }
-export type HintCtx = { login: string; email: string; ip: string; key: string; prevTag: string }
+export type HintCtx = { login: string; email: string; ip: string; key: string; prevTag: string; stagingIp: string }
 
 /** Verdadeiro se o evento é o comando `name` (e, opcionalmente, o subcomando `sub`) executado com sucesso. */
 const ran = (e: SimEvent, name: string, sub?: string) => e.kind === 'cmd' && e.name === name && e.code === 0 && (!sub || e.args[0] === sub)
@@ -48,6 +48,9 @@ export type Mission = {
 }
 
 const HOME = '/home/dev'
+const staging = () => aws.instances().find((i) => i.name === STAGING_NAME && i.state !== 'terminated')
+const production = () => aws.instances().find((i) => i.name !== STAGING_NAME && i.state === 'running')
+const waitingProd = () => actions.runs(TEAM_REPO).some((r) => r.jobs.some((j) => j.environment === 'staging' && j.conclusion === 'success') && r.jobs.some((j) => j.environment === 'production' && (j.status === 'waiting' || !!j.review)))
 const studentPr = () => github.pulls(TEAM_REPO).filter((p) => p.author === github.student()?.login).sort((a, b) => b.number - a.number)[0]
 const repoRoot = (fs: VFS) => allRepos(fs).find((r) => r.remoteKey === 'devlab/todo-api')?.root
 const ORIGINAL_TODOS = JSON.stringify([
@@ -144,6 +147,37 @@ export const FEATURE_ROUTE = `
 const { pendingCount } = require('./todos')
 app.get('/todos/pendentes', (req, res) => res.json({ pendentes: pendingCount() }))
 `
+
+const DEPLOY_STEPS = (smoke: boolean) => `    steps:
+      - name: Configurar a chave SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "\${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/deploy.pem
+          chmod 400 ~/.ssh/deploy.pem
+
+      - name: Trocar o container
+        run: |
+          ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy.pem ubuntu@\${{ secrets.EC2_HOST }} "docker pull $IMAGE:\${{ github.sha }} && docker rm -f todo; docker run -d -p 3000:3000 --restart unless-stopped --name todo $IMAGE:\${{ github.sha }}"
+${smoke ? `
+      - name: Teste de fumaça
+        run: curl -f http://\${{ secrets.EC2_HOST }}:3000/todos/pendentes
+` : ''}`
+
+/** Workflow da Missão 8: staging automático, produção só com aprovação. */
+export const ENV_CI_YML =
+  PR_CI_YML.slice(0, PR_CI_YML.indexOf('  deploy:\n')) +
+  `  staging:
+    name: Deploy em staging
+    needs: build
+    runs-on: ubuntu-latest
+    environment: staging
+${DEPLOY_STEPS(true)}
+  production:
+    name: Deploy em produção
+    needs: staging
+    runs-on: ubuntu-latest
+    environment: production
+${DEPLOY_STEPS(true)}`
 
 export const CI_YML = `name: CI
 
@@ -1304,6 +1338,147 @@ export const missions: Mission[] = [
           return !!r && !!pr && r.branch === 'main' && !r.branches?.[pr.head] && r.commits.some((c) => c.hash === pr.mergeCommit)
         },
         success: '🎉 Fluxo completo de time: branch, pull request, CI no PR, revisão, conflito resolvido, merge e deploy automático. É assim que a maioria das empresas trabalha.',
+      },
+    ],
+  },
+  {
+    id: 'm8-environments',
+    title: 'Missão 8 · Staging e produção',
+    short: 'Staging e produção',
+    summary:
+      'Até agora, todo merge ia direto para produção. Você vai criar um ambiente de staging: cada versão passa primeiro por um servidor de testes, com um teste de fumaça automático, e só chega em produção quando alguém aprova. É o mesmo pipeline, com uma porta de segurança no final.',
+    steps: [
+      {
+        id: 'm8-mail',
+        title: 'Leia o e-mail do Senku',
+        body: ['Abra o Mail: o Senku criou um servidor novo para você.'],
+        check: ({ event }) => event.kind === 'ui' && event.name.startsWith('mail:') && event.name.includes('staging'),
+        success: 'Staging é uma cópia da produção, para testar antes de valer.',
+      },
+      {
+        id: 'staging-ssh',
+        title: 'Conheça o servidor de staging',
+        body: [
+          'No console da AWS aparece uma instância nova, `todo-api-staging`. Ela usa a mesma chave da produção e já tem o Docker instalado.',
+          'Entre nela por SSH e rode `docker ps`: ainda não tem nenhum container. Depois saia com `exit`.',
+        ],
+        hint: ({ key, stagingIp }) => `ssh -i ~/Downloads/${key}.pem ubuntu@${stagingIp || '<IP-do-staging>'}`,
+        check: ({ event }) => {
+          const st = staging()
+          return !!st && ran(event, 'docker', 'ps') && event.kind === 'cmd' && event.host === `ip-${st.privateIp.replace(/\./g, '-')}`
+        },
+        success: 'Servidor limpo e pronto. Agora o GitHub precisa saber que existem dois lugares para fazer deploy.',
+      },
+      {
+        id: 'environments',
+        title: 'Crie os environments',
+        body: [
+          'No GitHub, abra Configurações › Environments e crie dois: `staging` e `production`.',
+          'Um environment é um destino de deploy, com secrets e regras próprios. O job que declara `environment: staging` recebe os secrets de staging.',
+        ],
+        browse: 'github.sim/devlab/todo-api/settings/environments',
+        check: () => !!github.environment(TEAM_REPO, 'staging') && !!github.environment(TEAM_REPO, 'production'),
+        success: 'Dois environments criados.',
+      },
+      {
+        id: 'env-secrets',
+        title: 'Um EC2_HOST para cada environment',
+        body: [
+          'Abra cada environment e adicione um secret `EC2_HOST`:\n• em `staging`: o IP público do servidor de staging\n• em `production`: o IP público da produção',
+          'O mesmo nome, valores diferentes. O workflow usa sempre `secrets.EC2_HOST`, e o GitHub entrega o valor do environment do job. A chave SSH continua no secret do repositório, que vale para todos.',
+        ],
+        check: () => {
+          const st = staging()
+          const prod = production()
+          return !!st && !!prod && github.environment(TEAM_REPO, 'staging')?.secrets.EC2_HOST?.value.trim() === st.publicIp && github.environment(TEAM_REPO, 'production')?.secrets.EC2_HOST?.value.trim() === prod.publicIp
+        },
+        success: 'Cada environment aponta para o seu servidor.',
+      },
+      {
+        id: 'reviewers',
+        title: 'Exija aprovação para produção',
+        body: [
+          'Ainda no environment `production`, marque "Revisores obrigatórios" e adicione você. A partir de agora, todo job de produção para e espera alguém da lista aprovar.',
+          'Em `staging` não precisa: o deploy lá é automático.',
+        ],
+        check: () => {
+          const me = github.student()?.login
+          return !!me && !!github.environment(TEAM_REPO, 'production')?.reviewers.includes(me)
+        },
+        success: 'Produção protegida por aprovação.',
+      },
+      {
+        id: 'env-workflow',
+        title: 'Escreva o novo workflow num branch',
+        body: [
+          'A main está protegida, então a mudança no pipeline também vai por pull request. Crie um branch a partir da main atualizada.',
+          'Depois troque o conteúdo de `.github/workflows/ci.yml` pelo de abaixo e salve. O job `deploy` virou dois:\n• `staging`: faz o deploy no servidor de staging e roda um teste de fumaça (`curl -f`, que falha se a rota não responder)\n• `production`: só começa se o staging passar e tem `environment: production`, então espera aprovação',
+        ],
+        hint: 'git switch main && git pull && git switch -c ci/staging',
+        snippet: { file: '.github/workflows/ci.yml', code: ENV_CI_YML, mode: 'replace' },
+        check: ({ fs }) => {
+          const root = repoRoot(fs)
+          const r = root ? findRepo(fs, root) : null
+          if (!r || r.branch === 'main') return false
+          try {
+            const y = load(fs.read(`${root}/.github/workflows/ci.yml`)) as { jobs?: Record<string, { environment?: unknown }> }
+            const envs = Object.values(y?.jobs ?? {}).map((j) => (typeof j.environment === 'string' ? j.environment : (j.environment as { name?: string } | undefined)?.name))
+            return envs.includes('staging') && envs.includes('production')
+          } catch {
+            return false
+          }
+        },
+        success: 'Workflow novo pronto no branch.',
+      },
+      {
+        id: 'env-pr',
+        title: 'Abra e mescle o pull request',
+        body: [
+          'Faça commit, `git push -u origin <seu-branch>` e abra o pull request no GitHub.',
+          'Espere os checks e a aprovação do Shikamaru e clique em "Merge pull request".',
+        ],
+        hint: 'git commit -am "ci: staging e produção com aprovação" && git push -u origin ci/staging',
+        check: () =>
+          github
+            .pulls(TEAM_REPO)
+            .some((p) => p.state === 'merged' && p.author === github.student()?.login && /environment:\s*production/.test(p.merged?.to['.github/workflows/ci.yml'] ?? '')),
+        success: 'Mesclado. O push na main disparou o pipeline novo.',
+      },
+      {
+        id: 'staging-ok',
+        title: 'Confira o staging',
+        body: [
+          'No Actions, abra a execução: test → build → staging passaram, e "Deploy em produção" está esperando (⏸).',
+          'Antes de aprovar, veja com os próprios olhos: abra o staging no navegador.',
+        ],
+        browse: ({ stagingIp }) => `http://${stagingIp || '<IP-do-staging>'}:3000/todos/pendentes`,
+        check: ({ event }) => {
+          const st = staging()
+          return !!st && event.kind === 'browse' && event.url.includes(`${st.publicIp}:3000`) && waitingProd()
+        },
+        success: 'Staging no ar com a versão nova. Produção ainda na anterior.',
+      },
+      {
+        id: 'approve',
+        title: 'Aprove o deploy em produção',
+        body: [
+          'Volte à execução no Actions, clique em "Revisar deployments", marque `production`, escreva um comentário e aprove.',
+          'O job de produção roda e o servidor de produção recebe exatamente a mesma imagem que você acabou de ver em staging.',
+        ],
+        check: () => actions.runs(TEAM_REPO).some((r) => r.jobs.some((j) => j.environment === 'production' && j.review?.state === 'approved' && j.conclusion === 'success')),
+        success: 'Em produção, com aprovação registrada: quem aprovou, quando e qual commit.',
+      },
+      {
+        id: 'reject',
+        title: 'Segure um deploy',
+        body: [
+          'A porta também serve para dizer "não". Faça outra mudança pequena num branch novo (por exemplo, o título de uma tarefa em `src/todos.js`), abra o PR e mescle quando aprovado.',
+          'Quando o staging terminar, imagine que você achou um problema nele. Em "Revisar deployments", rejeite o deploy de produção.',
+          'A produção continua na versão anterior, e o histórico mostra quem segurou e por quê.',
+        ],
+        hint: 'git switch main && git pull && git switch -c feat/titulo',
+        check: () => actions.runs(TEAM_REPO).some((r) => r.jobs.some((j) => j.environment === 'production' && j.review?.state === 'rejected')),
+        success: '🎉 Pipeline com staging, teste de fumaça e aprovação para produção. Nada chega aos usuários sem passar por um ambiente de teste e por uma pessoa.',
       },
     ],
   },

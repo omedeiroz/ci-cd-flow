@@ -6,10 +6,10 @@ import { github } from '../engine/github'
 import { net } from '../engine/node'
 import { team } from '../engine/team'
 import { mail } from '../engine/mail'
-import { aws } from '../engine/aws'
+import { aws, STAGING_NAME } from '../engine/aws'
 import { actions } from '../engine/actions'
 import { editor } from '../engine/editor'
-import { prepareMission } from '../engine/bootstrap'
+import { prepareMission, provisionStaging } from '../engine/bootstrap'
 import { docker } from '../engine/docker'
 import { openWorld, PROJECTS } from '../engine/openworld'
 
@@ -88,13 +88,15 @@ type OS = {
 
 let openCount = 0
 /** Estado auxiliar que também vai para o progresso salvo. */
-export const flags = { awsMail: false, ciMail: false, dockerMail: false, m6Mail: false, m7Mail: false }
+export const flags = { awsMail: false, ciMail: false, dockerMail: false, m6Mail: false, m7Mail: false, m8Mail: false }
 export const doneProjects = new Set<string>()
 export const seen = new Set<string>()
 
 export const hintCtx = (): HintCtx => {
   const u = github.student()
-  const inst = aws.instances().find((i) => i.state === 'running') ?? aws.instances()[0]
+  const prod = aws.instances().filter((i) => i.name !== STAGING_NAME)
+  const inst = prod.find((i) => i.state === 'running') ?? prod[0]
+  const staging = aws.instances().find((i) => i.name === STAGING_NAME && i.state !== 'terminated')
   const shaTags = Object.keys(docker.registry()['devlab/todo-api']?.tags ?? {}).filter((t) => /^[0-9a-f]{40}$/.test(t))
   return {
     login: u?.login ?? '',
@@ -102,6 +104,7 @@ export const hintCtx = (): HintCtx => {
     ip: inst?.publicIp ?? '',
     key: inst?.keyName ?? aws.keyPairs()[0]?.name ?? 'todo-key',
     prevTag: shaTags[shaTags.length - 2] ?? '',
+    stagingIp: staging?.publicIp ?? '',
   }
 }
 
@@ -282,6 +285,24 @@ export const useOS = create<OS>((set, get) => ({
           { kind: 'p', text: 'Combinado do time a partir de hoje:\n1. Ninguém faz push direto na main (o GitHub vai bloquear).\n2. Cada mudança nasce num branch e vira um pull request.\n3. O CI roda no PR, e pelo menos uma pessoa aprova antes do merge.' },
           { kind: 'p', text: 'Primeira tarefa nesse fluxo: um endpoint que diga quantas tarefas estão pendentes. O Shikamaru revisa. A Bulma também está mexendo na API, então fica de olho.' },
           { kind: 'button', label: 'Configurações do repositório', url: 'https://github.sim/devlab/todo-api/settings/branches' },
+        ],
+      })
+    }
+    if (idx >= 7 && !flags.m8Mail) {
+      flags.m8Mail = true
+      const st = provisionStaging()
+      mail.send({
+        from: 'Senku Ishigami',
+        fromAddr: 'senku@devlab.sim',
+        avatar: 1,
+        to: github.student()?.email ?? 'você',
+        subject: 'Antes da produção, staging',
+        preview: 'Revisão de código ajuda, mas não pega tudo. Subi um servidor de staging…',
+        body: [
+          { kind: 'p', text: 'Revisão de código ajuda, mas não pega tudo: às vezes o código está certo e o problema só aparece rodando de verdade. Hoje, todo merge vai direto para os usuários.' },
+          { kind: 'p', text: `Subi um servidor de staging (${STAGING_NAME}${st ? `, IP ${st.publicIp}` : ''}), igual à produção, com a mesma chave SSH e o Docker instalado.` },
+          { kind: 'p', text: 'O plano:\n1. Todo merge na main vai automaticamente para staging, com um teste rápido.\n2. Produção só recebe a versão depois que alguém olhar o staging e aprovar.\n\nO GitHub chama isso de environments.' },
+          { kind: 'button', label: 'Configurações › Environments', url: 'https://github.sim/devlab/todo-api/settings/environments' },
         ],
       })
     }
