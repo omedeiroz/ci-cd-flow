@@ -10,6 +10,23 @@ npm install
 npm run dev
 ```
 
+## Testes
+
+```bash
+npm test          # roda todos os testes uma vez
+npm run test:watch
+```
+
+Os testes (Vitest, em `tests/`) dirigem o simulador como um aluno faria: digitam comandos, respondem prompts, entram em servidores e acompanham o Guia. Cobrem o shell e as ferramentas, as Missões 1 a 6 de ponta a ponta, os 6 projetos do mundo aberto e o progresso salvo. Os timers do simulador (instância ligando, steps do pipeline, convites) rodam com relógio falso, então a suíte inteira leva poucos segundos.
+
+- `tests/harness.ts`: o "aluno" de teste (`createStudent`), `waitRuns` e `tick`
+- `tests/shell.test.ts`: shell, chmod, pipes, `&&`/`||`, node/npm, Node 18 vs 20
+- `tests/missions-1-3.test.ts`, `mission4..6.test.ts`: as missões guiadas
+- `tests/openworld.test.ts`: os 6 projetos do mundo aberto
+- `tests/persistence.test.ts`: salvar, bagunçar e restaurar o estado
+
+O workflow `.github/workflows/ci.yml` roda lint, testes e build a cada push e pull request.
+
 ## Progresso salvo
 
 Todo o estado do simulador (arquivos, repositórios, GitHub, e-mails, AWS, containers, execuções do pipeline, editor, missão e janelas) é salvo automaticamente no `localStorage` do navegador (`src/store/persist.ts`) e restaurado ao abrir. Sessões SSH e pipelines em andamento não sobrevivem ao recarregar (os pipelines aparecem como cancelados). O menu ∞ tem "Salvar agora" e "Recomeçar do zero".
