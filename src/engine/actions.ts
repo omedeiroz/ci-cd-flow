@@ -418,7 +418,7 @@ async function runJob(run: Run, job: JobRun, def: JobDef, wf: WorkflowDef) {
       await sleep(300)
       log('Cleaning up orphan processes')
     } else if (sdef?.uses) {
-      ok = await useAction({ ...sdef, with: Object.fromEntries(Object.entries(sdef.with ?? {}).map(([k, v]) => [k, typeof v === 'string' ? expr(v) : v])) }, { fs, workspace, run, log, machine, perms: def.permissions ?? wf.permissions })
+      ok = await runAction({ ...sdef, with: Object.fromEntries(Object.entries(sdef.with ?? {}).map(([k, v]) => [k, typeof v === 'string' ? expr(v) : v])) }, { fs, workspace, run, log, machine, perms: def.permissions ?? wf.permissions })
     } else if (sdef?.run) {
       const script = expr(sdef.run)
       log(`\u001b[36mRun ${mask(sdef.run.split('\n')[0])}\u001b[0m`)
@@ -456,7 +456,7 @@ async function runJob(run: Run, job: JobRun, def: JobDef, wf: WorkflowDef) {
 
 const NODE_VERSIONS: Record<string, string> = { '16': 'v16.20.2', '18': 'v18.20.4', '20': 'v20.15.0', '22': 'v22.9.0' }
 
-async function useAction(
+async function runAction(
   s: StepDef,
   c: { fs: VFS; workspace: string; run: Run; log: (l: string) => void; machine: Machine; perms: Permissions | undefined },
 ): Promise<boolean> {

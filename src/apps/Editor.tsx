@@ -60,7 +60,7 @@ function FileIc({ name }: { name: string }) {
 type GitMark = Record<string, 'M' | 'U' | 'D' | 'A'>
 
 /** Marcas do git por caminho relativo (e propagadas para as pastas). */
-function useGitMarks(root: string | null): { marks: GitMark; repo: ReturnType<typeof findRepo> } {
+function gitMarksFor(root: string | null): { marks: GitMark; repo: ReturnType<typeof findRepo> } {
   const fs = editor.fs
   if (!fs || !root) return { marks: {}, repo: null }
   const repo = findRepo(fs, root)
@@ -411,7 +411,7 @@ export function EditorApp() {
   const buf = open.find((b) => b.path === active)
   const lang = buf ? langOf(buf.path) : 'plaintext'
   const html = useMemo(() => (buf ? highlight(buf.content, lang) + '\n' : ''), [buf, lang])
-  const { marks, repo } = useGitMarks(root)
+  const { marks, repo } = gitMarksFor(root)
   const changeCount = Object.entries(marks).filter(([p]) => fs?.get(p)?.type !== 'dir').length
 
   const yamlErr = useMemo(() => {

@@ -33,10 +33,10 @@ export type Cmd = { help: string; pkg?: string; run: (args: string[], ctx: Ctx) 
 export type Machine = { id: string; os: 'mac' | 'ubuntu' | 'debian' | 'amazon'; packages: Set<string>; aptUpdated: boolean; ip?: string; interactive?: boolean; userGroups?: Record<string, string[]>; nodeVersion?: string }
 
 /** Encadeia um resultado que pode ter prompts pendentes. `cont` roda quando tudo foi respondido. */
-export function then(r: Result, cont: (r: Result) => Result): Result {
+export function afterPrompts(r: Result, cont: (r: Result) => Result): Result {
   if (!r.prompt) return cont(r)
   const p = r.prompt
-  return { ...r, prompt: { ...p, answer: (input) => then(p.answer(input), cont) } }
+  return { ...r, prompt: { ...p, answer: (input) => afterPrompts(p.answer(input), cont) } }
 }
 
 export function modeString(isDir: boolean, mode: number) {
@@ -575,7 +575,7 @@ export class Shell {
       }
       if (result.prompt || result.session) {
         // comandos interativos: o evento sai quando o usuário terminar de responder
-        return then(result, (final) => {
+        return afterPrompts(result, (final) => {
           this.onCommand?.({ line: fullLine, name, args, code: final.code, cwd: this.cwd, host: this.host })
           return final
         })
