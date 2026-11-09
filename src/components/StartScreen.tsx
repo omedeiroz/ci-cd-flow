@@ -3,12 +3,11 @@ import { useRef, useState } from 'react'
 import { useOS } from '../store/os'
 import { persist, progressOf, SLOT_IDS, type Profile, type SlotMeta } from '../store/persist'
 import { missions } from '../engine/missions'
-import { AnimeAvatar } from './AnimeAvatar'
+import { AnimeAvatar, PLAYER_AVATARS as AVATARS } from './AnimeAvatar'
 import { LogoMark } from './Icons'
 
 type View = 'home' | 'load' | 'new' | 'missions'
 
-const AVATARS = [0, 1, 2, 3, 4, 5, 6, 13, 16, 23, 25, 30]
 export const VERSION_LABEL = 'versão 0.11'
 
 const when = (ms: number) => {
@@ -244,7 +243,7 @@ function NewGame({ slots, mission, setMission, back }: { slots: SlotMeta[]; miss
   const firstEmpty = SLOT_IDS.find((id) => !slots.some((s) => s.id === id))
   const [slot, setSlot] = useState(firstEmpty ?? SLOT_IDS[0])
   const [name, setName] = useState('')
-  const [avatar, setAvatar] = useState(AVATARS[0])
+  const [avatar, setAvatar] = useState(() => AVATARS[Math.floor(Math.random() * AVATARS.length)])
   const taken = slots.find((s) => s.id === slot)
   const ok = name.trim().length >= 2
   return (
@@ -262,11 +261,14 @@ function NewGame({ slots, mission, setMission, back }: { slots: SlotMeta[]; miss
           <input value={name} onChange={(e) => setName(e.target.value.slice(0, 24))} placeholder="Como quer ser chamado(a)?" autoFocus aria-label="Seu nome" />
         </label>
         <div className="start-field">
-          <span>Avatar</span>
+          <span className="start-avatar-label">
+            Avatar
+            <button type="button" onClick={() => setAvatar(AVATARS[Math.floor(Math.random() * AVATARS.length)])}>🎲 Aleatório</button>
+          </span>
           <div className="start-avatars">
             {AVATARS.map((a) => (
               <button type="button" key={a} className={a === avatar ? 'on' : ''} onClick={() => setAvatar(a)} aria-label={`Avatar ${a}`}>
-                <AnimeAvatar seed={a} size={44} />
+                <AnimeAvatar seed={a} size={40} />
               </button>
             ))}
           </div>

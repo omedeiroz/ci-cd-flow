@@ -10,14 +10,20 @@ const pick = <T,>(arr: T[], seed: number, salt: number) => arr[Math.abs(Math.imu
 
 export const AVATAR_COUNT = 48
 
+/** Avatares escolhíveis pelo jogador: sementes a partir de 1000 combinam cabelo e penteado sem repetir. */
+export const PLAYER_AVATARS = Array.from({ length: 48 }, (_, i) => 1000 + ((i * 7) % 48))
+
 export function AnimeAvatar({ seed, size = 32 }: { seed: number; size?: number }) {
-  const hair = pick(HAIR, seed, 1)
-  const eye = pick(EYES, seed, 2)
-  const bg = pick(BG, seed, 3)
-  const shirt = pick(SHIRT, seed, 4)
-  const skin = pick(SKIN, seed, 5)
-  const style = seed % 4 // 0 curto espetado, 1 longo, 2 maria-chiquinha, 3 chanel
-  const extra = Math.floor(seed / 4) % 3 // 0 nada, 1 mecha (ahoge), 2 presilha
+  // sementes >= 1000: combinação explícita (cada uma diferente); abaixo disso, "aleatória" por hash
+  const v = seed - 1000
+  const explicit = v >= 0
+  const hair = explicit ? HAIR[v % HAIR.length] : pick(HAIR, seed, 1)
+  const eye = explicit ? EYES[(v * 5 + Math.floor(v / 12)) % EYES.length] : pick(EYES, seed, 2)
+  const bg = explicit ? BG[(v * 3 + 1) % BG.length] : pick(BG, seed, 3)
+  const shirt = explicit ? SHIRT[(v * 11 + 2) % SHIRT.length] : pick(SHIRT, seed, 4)
+  const skin = explicit ? SKIN[(v + Math.floor(v / 4)) % SKIN.length] : pick(SKIN, seed, 5)
+  const style = explicit ? Math.floor(v / 12) % 4 : seed % 4 // 0 curto espetado, 1 longo, 2 maria-chiquinha, 3 chanel
+  const extra = explicit ? (v * 7) % 3 : Math.floor(seed / 4) % 3 // 0 nada, 1 mecha (ahoge), 2 presilha
   const id = `av${seed}`
   return (
     <svg viewBox="0 0 64 64" width={size} height={size} className="anime-avatar" aria-hidden>
