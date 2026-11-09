@@ -42,8 +42,10 @@ src/
   store/os.ts    # estado global (Zustand): janelas, missão atual, singletons do motor
   store/persist.ts # progresso salvo no navegador (snapshot/restore de todos os módulos)
   components/    # MenuBar, Dock, Window, Icons
-    git.ts       # git simulado (estado por máquina, .gitignore, diff, push autenticado por token)
-    github.ts    # github.sim: contas, verificação de e-mail, convites, tokens, repositórios
+    git.ts       # git simulado: branches, upstream, fetch/pull/merge, conflitos, push autenticado por token
+    merge.ts     # merge de 3 vias (texto e árvores) com marcadores de conflito
+    github.ts    # github.sim: contas, convites, tokens, repositórios, branches, pull requests, proteção de branch
+    team.ts      # colegas da Missão 7: revisão automática do PR e a mudança da Bulma que gera o conflito
     mail.ts      # caixa de entrada (GitHub e AWS "enviam" e-mails)
     node.ts      # npm/node/curl e serviços de rede por máquina; os testes do projeto rodam de verdade
     aws.ts       # console.aws.sim: IAM, EC2, pares de chaves, security groups, ssh, apt/dnf
@@ -86,5 +88,6 @@ máquina remota).
 - [x] Mundo aberto: 6 repositórios de outros times (GitHub Pages, lint, bug real, matrix Node 18/20, cron + workflow_dispatch, infra do zero com porta 80)
 - [x] Editor estilo VS Code: barra de atividades, Explorer com status do git, pesquisa, controle de código-fonte, abrir pasta, Ctrl+P, paleta de comandos, terminal integrado
 - [x] Missão 6: pipeline com Docker: GITHUB_TOKEN e permissions, imagem com tag do commit, deploy com docker pull, rollback
+- [x] Missão 7: branches e pull requests: proteção da main, `git switch -c`, `push -u`, CI em pull requests, revisão de código, conflito com merge de 3 vias, merge e limpeza
 - [x] Missão 5: Docker: Dockerfile, .dockerignore, build com cache, run/ps/logs/exec, registry ghcr.sim (login/tag/push), Docker no servidor (grupo docker, --restart)
 - [x] Missão 4: editor de código, workflow do GitHub Actions (CI), teste quebrado de propósito, secrets e job de deploy via SSH na EC2 (CD)

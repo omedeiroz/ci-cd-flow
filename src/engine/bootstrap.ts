@@ -6,7 +6,7 @@ import { github } from './github'
 import { allRepos, readConfig, saveCredentials } from './git'
 import { AMIS, aws } from './aws'
 import { net } from './node'
-import { CI_YML, DEPLOY_YML } from './missions'
+import { CI_YML, DEPLOY_YML, DOCKER_CI_YML } from './missions'
 
 export function prepareMission(idx: number, fs: VFS, sh: Shell) {
   if (!fs.isDir(`${fs.home}/projetos`)) fs.mkdir(`${fs.home}/projetos`, true)
@@ -85,5 +85,13 @@ export function prepareMission(idx: number, fs: VFS, sh: Shell) {
     fs.mkdir(`${root}/.github/workflows`, true)
     fs.write(`${root}/.github/workflows/ci.yml`, CI_YML.replace(/\s*$/, '\n') + DEPLOY_YML)
     ws.execute('git add .github && git commit -m "ci: pipeline com deploy na EC2" && git push')
+  }
+
+  if (idx < 6) return
+
+  // Missão 6: pipeline com Docker (test → build → deploy)
+  if (root && !(github.head(key)?.tree['.github/workflows/ci.yml'] ?? '').includes('docker build')) {
+    fs.write(`${root}/.github/workflows/ci.yml`, DOCKER_CI_YML)
+    ws.execute('git commit -am "ci: build e deploy com Docker" && git push')
   }
 }

@@ -12,6 +12,7 @@ import { actionsDump, actionsLoad } from '../engine/actions'
 import { editorDump, editorLoad } from '../engine/editor'
 import { openWorld, openWorldDump, openWorldLoad } from '../engine/openworld'
 import { github } from '../engine/github'
+import { team, teamDump, teamLoad } from '../engine/team'
 import { doneProjects, flags, localFs, localMachine, seen, shell, useOS, type AppId, type Win } from './os'
 import type { VFS } from '../engine/fs'
 
@@ -31,6 +32,7 @@ type Save = {
   actions: ReturnType<typeof actionsDump>
   editor: ReturnType<typeof editorDump>
   openWorld: { started: boolean }
+  team?: ReturnType<typeof teamDump>
   ui: {
     missionIdx: number
     stepIdx: number
@@ -70,6 +72,7 @@ function snapshot(): Save {
     actions: actionsDump(),
     editor: editorDump(),
     openWorld: openWorldDump(),
+    team: teamDump(),
     ui: {
       missionIdx: s.missionIdx,
       stepIdx: s.stepIdx,
@@ -99,6 +102,8 @@ function apply(d: Save) {
   actionsLoad(d.actions)
   editorLoad(d.editor, localFs)
   openWorldLoad(d.openWorld)
+  teamLoad(d.team)
+  team.resume()
   const student = github.student()
   if (student) openWorld.ensureInvites(student)
   Object.assign(flags, d.ui.flags)

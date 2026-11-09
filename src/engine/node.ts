@@ -246,10 +246,42 @@ export function runTests(fs: VFS, root: string, node?: string) {
 /** Rotas JSON conhecidas dos apps do simulador (lidas do código real do projeto). */
 export function apiRoute(svc: Service, path: string): string | undefined {
   try {
+    const fromServer = serverRoute(svc.fs, svc.root, path)
+    if (fromServer !== undefined) return fromServer
     if (path === '/todos' && svc.fs.exists(`${svc.root}/src/todos.js`)) return JSON.stringify(loadTodos(svc.fs, svc.root))
     if (path === '/products' && svc.fs.exists(`${svc.root}/src/catalog.js`)) return JSON.stringify(callExport(svc.fs, svc.root, 'src/catalog.js', 'listProducts'))
   } catch (e) {
     return `{"error":"${(e as Error).message}"}`
+  }
+  return undefined
+}
+
+/** Lê as rotas `app.get('/x', (req, res) => res.json(EXPR))` do src/server.js e avalia EXPR com os módulos importados. */
+function serverRoute(fs: VFS, root: string, path: string): string | undefined {
+  let src: string
+  try {
+    src = fs.read(`${root}/src/server.js`)
+  } catch {
+    return undefined
+  }
+  const re = /app\.get\(\s*['"`]([^'"`]+)['"`]\s*,\s*\(\s*req\s*,\s*res\s*\)\s*=>\s*res(?:\.status\(\d+\))?\.json\(([\s\S]*?)\)\s*\)\s*(?:;|\n)/g
+  for (const m of src.matchAll(re)) {
+    if (m[1] !== path) continue
+    const names: string[] = []
+    const values: unknown[] = []
+    for (const r of src.matchAll(/const\s*\{([^}]+)\}\s*=\s*require\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g)) {
+      const rel = r[2].replace(/^\.\//, 'src/').replace(/^\.\.\//, '')
+      const mod = loadModule(fs, root, /\.js(on)?$/.test(rel) ? rel : `${rel}.js`)
+      for (const n of r[1].split(',').map((x) => x.trim()).filter(Boolean)) {
+        names.push(n)
+        values.push(mod[n])
+      }
+    }
+    const req = makeRequire(fs, root, [])
+    names.push('require')
+    values.push((id: string) => req(fs.resolve(`${root}/src`, id)))
+    const value = new Function(...names, `return (${m[2]})`)(...values)
+    return JSON.stringify(value)
   }
   return undefined
 }

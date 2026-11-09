@@ -4,6 +4,7 @@ import { actions, type JobRun, type Run, type StepRun } from '../../engine/actio
 import { github, type RemoteRepo } from '../../engine/github'
 import { useOS } from '../../store/os'
 import { AnimeAvatar, GhostAvatar } from '../../components/AnimeAvatar'
+import { BranchesSettings } from './PullPages'
 
 const go = (u: string) => useOS.getState().openBrowser(`https://github.sim${u}`)
 const ago = (ms: number) => {
@@ -40,7 +41,7 @@ function useSeen() {
   }, [])
 }
 
-const EVENT_LABEL = { push: 'push', workflow_dispatch: 'manual', schedule: '⏰ agendado' } as const
+const EVENT_LABEL = { push: 'push', workflow_dispatch: 'manual', schedule: '⏰ agendado', pull_request: 'pull request' } as const
 
 export function ActionsList({ repo }: { repo: RemoteRepo }) {
   useSeen()
@@ -224,7 +225,7 @@ export function RunView({ repo, id }: { repo: RemoteRepo; id: number }) {
         ) : (
           <>
             <div className="ci-graph">
-              <div className="ci-graph-file">{run.file.split('/').pop()}<div className="gh-muted">on: push</div></div>
+              <div className="ci-graph-file">{run.file.split('/').pop()}<div className="gh-muted">on: {run.event}</div></div>
               {run.jobs.map((j, i) => (
                 <div key={j.key} className="ci-graph-item">
                   {i > 0 || j.needs.length ? <span className="ci-arrow">→</span> : <span className="ci-arrow">→</span>}
@@ -245,17 +246,28 @@ export function RunView({ repo, id }: { repo: RemoteRepo; id: number }) {
 
 // ---------- Configurações > Secrets ----------
 
-export function SecretsPage({ repo }: { repo: RemoteRepo }) {
-  const [tab, setTab] = useState<'secrets' | 'pages'>('secrets')
+type SetTab = 'secrets' | 'pages' | 'branches'
+export function SecretsPage({ repo, initial = 'secrets' }: { repo: RemoteRepo; initial?: SetTab }) {
+  const [tab, setTab] = useState<SetTab>(initial)
+  useEffect(() => setTab(initial), [initial])
+  if (tab === 'branches')
+    return (
+      <div className="gh-settings">
+        <SettingsNav tab="branches" setTab={setTab} />
+        <main>
+          <BranchesSettings repo={repo} />
+        </main>
+      </div>
+    )
   return tab === 'pages' ? <PagesSettings repo={repo} setTab={setTab} /> : <SecretsInner repo={repo} setTab={setTab} />
 }
 
-function SettingsNav({ tab, setTab }: { tab: 'secrets' | 'pages'; setTab: (t: 'secrets' | 'pages') => void }) {
+function SettingsNav({ tab, setTab }: { tab: SetTab; setTab: (t: SetTab) => void }) {
   return (
     <aside>
       <div className="side">Geral</div>
       <div className="side">Colaboradores</div>
-      <div className="side">Branches</div>
+      <div className={`side ${tab === 'branches' ? 'on' : ''}`} onClick={() => setTab('branches')}>Branches</div>
       <div className="side-group">Código e automação</div>
       <div className={`side ${tab === 'pages' ? 'on' : ''}`} onClick={() => setTab('pages')}>Pages</div>
       <div className="side-group">Segurança</div>
@@ -264,7 +276,7 @@ function SettingsNav({ tab, setTab }: { tab: 'secrets' | 'pages'; setTab: (t: 's
   )
 }
 
-function PagesSettings({ repo, setTab }: { repo: RemoteRepo; setTab: (t: 'secrets' | 'pages') => void }) {
+function PagesSettings({ repo, setTab }: { repo: RemoteRepo; setTab: (t: SetTab) => void }) {
   const key = `${repo.owner}/${repo.name}`
   const p = actions.pages(key)
   const url = actions.pagesUrl(key)
@@ -294,7 +306,7 @@ function PagesSettings({ repo, setTab }: { repo: RemoteRepo; setTab: (t: 'secret
   )
 }
 
-function SecretsInner({ repo, setTab }: { repo: RemoteRepo; setTab: (t: 'secrets' | 'pages') => void }) {
+function SecretsInner({ repo, setTab }: { repo: RemoteRepo; setTab: (t: SetTab) => void }) {
   const key = `${repo.owner}/${repo.name}`
   const [mode, setMode] = useState<null | { name: string; isNew: boolean }>(null)
   const [name, setName] = useState('')

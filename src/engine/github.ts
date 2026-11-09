@@ -1,4 +1,5 @@
 // "GitHub" simulado: repositórios remotos que o git do terminal e o Navegador enxergam.
+import { mergeBase, mergeTrees, unionHistory } from './merge'
 
 export type Tree = Record<string, string>
 export type Commit = {
@@ -9,7 +10,29 @@ export type Commit = {
   email: string
   date: number
   tree: Tree
+  parent2?: string | null // segundo pai (commits de merge)
 }
+export type Review = { by: string; state: 'APPROVED' | 'CHANGES_REQUESTED' | 'COMMENTED'; body: string; date: number; commit: string }
+export type PullComment = { by: string; body: string; date: number }
+export type PullRequest = {
+  number: number
+  title: string
+  body: string
+  head: string
+  base: string
+  author: string
+  state: 'open' | 'merged' | 'closed'
+  created: number
+  reviews: Review[]
+  comments: PullComment[]
+  requested: string[] // revisores solicitados
+  mergedAt?: number
+  mergedBy?: string
+  mergeCommit?: string
+  headDeleted?: boolean
+  merged?: { commits: Commit[]; from: Tree; to: Tree } // retrato do que foi mesclado (o branch pode ser apagado depois)
+}
+export type Protection = { requirePr: boolean; approvals: number; requireChecks: boolean }
 export type RemoteRepo = {
   owner: string
   name: string
@@ -20,6 +43,9 @@ export type RemoteRepo = {
   collaborators: string[]
   admins: string[]
   secrets: Record<string, { value: string; updated: number }>
+  branches?: Record<string, Commit[]> // branches além do padrão (o padrão fica em `commits`)
+  pulls?: PullRequest[]
+  protection?: Record<string, Protection>
 }
 
 export type Token = { id: string; note: string; value: string; scopes: string[]; created: number; expires: string }
@@ -245,11 +271,171 @@ export const github = {
     const r = repos[key]
     return r?.commits[r.commits.length - 1]
   },
-  setCommits(key: string, commits: Commit[], pusher = '') {
-    const before = this.head(key)
-    repos[key] = { ...repos[key], commits: [...commits] }
+  setCommits(key: string, commits: Commit[], pusher = '', branch?: string) {
+    const r = repos[key]
+    const b = branch ?? r.branch
+    const before = this.branchHead(key, b)
+    if (b === r.branch) repos[key] = { ...r, commits: [...commits] }
+    else repos[key] = { ...r, branches: { ...(r.branches ?? {}), [b]: [...commits] } }
     emit()
-    onPushHook?.(key, before, this.head(key)!, pusher)
+    onPushHook?.(key, before, commits[commits.length - 1], pusher, b)
+    const pr = this.openPullFor(key, b)
+    if (pr) onPullHook?.(key, pr, 'synchronize')
+  },
+
+  // ---------- branches ----------
+  branchNames(key: string): string[] {
+    const r = repos[key]
+    return r ? [r.branch, ...Object.keys(r.branches ?? {})] : []
+  },
+  branchCommits(key: string, branch: string): Commit[] | undefined {
+    const r = repos[key]
+    if (!r) return undefined
+    return branch === r.branch ? r.commits : r.branches?.[branch]
+  },
+  branchHead(key: string, branch: string): Commit | undefined {
+    const l = this.branchCommits(key, branch)
+    return l?.[l.length - 1]
+  },
+  deleteBranch(key: string, branch: string) {
+    const r = repos[key]
+    if (!r?.branches?.[branch]) return
+    const rest = { ...r.branches }
+    delete rest[branch]
+    repos[key] = { ...r, branches: rest }
+    for (const pr of r.pulls ?? []) if (pr.head === branch && pr.state !== 'open') pr.headDeleted = true
+    emit()
+  },
+  protection(key: string, branch: string): Protection | undefined {
+    return repos[key]?.protection?.[branch]
+  },
+  setProtection(key: string, branch: string, p: Protection | null) {
+    const r = repos[key]
+    if (!r) return
+    const all = { ...(r.protection ?? {}) }
+    if (p) all[branch] = p
+    else delete all[branch]
+    repos[key] = { ...r, protection: all }
+    emit()
+  },
+
+  // ---------- pull requests ----------
+  pulls(key: string): PullRequest[] {
+    return repos[key]?.pulls ?? []
+  },
+  pull(key: string, n: number): PullRequest | undefined {
+    return repos[key]?.pulls?.find((p) => p.number === n)
+  },
+  openPullFor(key: string, head: string): PullRequest | undefined {
+    return repos[key]?.pulls?.find((p) => p.head === head && p.state === 'open')
+  },
+  createPull(key: string, d: { title: string; body: string; head: string; base: string; author: string }): PullRequest | string {
+    const r = repos[key]
+    if (!r) return 'Repositório não encontrado.'
+    if (!d.title.trim()) return 'O título é obrigatório.'
+    if (d.head === d.base) return 'Escolha branches diferentes.'
+    const head = this.branchCommits(key, d.head)
+    const base = this.branchCommits(key, d.base)
+    if (!head || !base) return 'Branch não encontrado.'
+    if (this.openPullFor(key, d.head)) return `Já existe um pull request aberto para ${d.head}.`
+    if (!head.some((c) => !base.some((b) => b.hash === c.hash))) return `Não há nada para comparar: ${d.base} já contém todos os commits de ${d.head}.`
+    const pulls = r.pulls ?? (r.pulls = [])
+    const pr: PullRequest = {
+      number: (r.pulls.length ? Math.max(...r.pulls.map((p) => p.number)) : 0) + 1,
+      title: d.title.trim(),
+      body: d.body,
+      head: d.head,
+      base: d.base,
+      author: d.author,
+      state: 'open',
+      created: Date.now(),
+      reviews: [],
+      comments: [],
+      requested: [],
+    }
+    pulls.push(pr)
+    emit()
+    onPullHook?.(key, pr, 'opened')
+    return pr
+  },
+  review(key: string, n: number, review: Omit<Review, 'date' | 'commit'>) {
+    const pr = this.pull(key, n)
+    if (!pr) return
+    pr.reviews.push({ ...review, date: Date.now(), commit: this.branchHead(key, pr.head)?.hash ?? '' })
+    pr.requested = pr.requested.filter((x) => x !== review.by)
+    emit()
+  },
+  comment(key: string, n: number, by: string, body: string) {
+    const pr = this.pull(key, n)
+    if (!pr || !body.trim()) return
+    pr.comments.push({ by, body: body.trim(), date: Date.now() })
+    emit()
+    onPullHook?.(key, pr, 'commented')
+  },
+  requestReview(key: string, n: number, login: string) {
+    const pr = this.pull(key, n)
+    if (!pr || pr.requested.includes(login)) return
+    pr.requested.push(login)
+    emit()
+  },
+  closePull(key: string, n: number) {
+    const pr = this.pull(key, n)
+    if (pr && pr.state === 'open') ((pr.state = 'closed'), emit())
+  },
+  /** Situação do PR: conflitos, aprovações e o que impede o merge. */
+  pullStatus(key: string, n: number) {
+    const pr = this.pull(key, n)!
+    const head = this.branchCommits(key, pr.head) ?? []
+    const base = this.branchCommits(key, pr.base) ?? []
+    const headTip = head[head.length - 1]
+    const baseTip = base[base.length - 1]
+    const upToDate = !!baseTip && head.some((c) => c.hash === baseTip.hash)
+    let conflicts: string[] = []
+    if (!upToDate && headTip && baseTip) {
+      const mb = mergeBase(head, base)
+      conflicts = mergeTrees(mb?.tree ?? {}, headTip.tree, baseTip.tree, { ours: pr.head, theirs: pr.base }).conflicts
+    }
+    // a revisão mais recente de cada pessoa é a que vale
+    const latest = new Map<string, Review>()
+    for (const rv of pr.reviews) if (rv.state !== 'COMMENTED') latest.set(rv.by, rv)
+    const approvals = [...latest.values()].filter((r) => r.state === 'APPROVED').length
+    const changesRequested = [...latest.values()].filter((r) => r.state === 'CHANGES_REQUESTED').map((r) => r.by)
+    const checks = checksProvider?.(key, headTip?.hash ?? '') ?? []
+    const rule = this.protection(key, pr.base)
+    const blockers: string[] = []
+    if (conflicts.length) blockers.push('conflicts')
+    if (rule) {
+      if (changesRequested.length) blockers.push('changes')
+      if (approvals < rule.approvals) blockers.push('approvals')
+      if (rule.requireChecks && (!checks.length || checks.some((c) => c.state === 'pending' || c.state === 'failure'))) blockers.push('checks')
+    }
+    return { pr, head, base, headTip, baseTip, upToDate, conflicts, approvals, changesRequested, checks, rule, blockers }
+  },
+  /** Botão "Merge pull request": cria o commit de merge no branch base. */
+  mergePull(key: string, n: number, login: string, bypass = false): string | null {
+    const st = this.pullStatus(key, n)
+    const { pr, head, base, headTip, baseTip } = st
+    if (pr.state !== 'open') return 'Este pull request não está aberto.'
+    if (!this.isCollaborator(login, key)) return 'Você não tem permissão de escrita neste repositório.'
+    if (st.conflicts.length || (!bypass && st.blockers.length)) return 'O merge está bloqueado.'
+    const mb = mergeBase(head, base)
+    const tree = st.upToDate ? headTip!.tree : mergeTrees(mb?.tree ?? {}, headTip!.tree, baseTip!.tree, { ours: pr.head, theirs: pr.base }).tree
+    const u = users[login]
+    const mc: Commit = {
+      ...makeCommit(baseTip ?? null, tree, `Merge pull request #${pr.number} from ${pr.author}/${pr.head}
+
+${pr.title}`, u?.name ?? login, u?.email ?? `${login}@users.noreply.github.sim`),
+      parent2: headTip!.hash,
+    }
+    const baseSet = new Set(base.map((c) => c.hash))
+    pr.merged = { commits: head.filter((c) => !baseSet.has(c.hash)), from: mb?.tree ?? {}, to: headTip!.tree }
+    pr.state = 'merged'
+    pr.mergedAt = Date.now()
+    pr.mergedBy = login
+    pr.mergeCommit = mc.hash
+    this.setCommits(key, [...unionHistory(base, head), mc], login, pr.base)
+    onPullHook?.(key, pr, 'merged')
+    return null
   },
 
   // ---------- administração / secrets ----------
@@ -419,6 +605,10 @@ export const github = {
     return t ? { user: u, scopes: t.scopes } : { error: 'invalid' }
   },
 
+  /** Força a atualização das telas. */
+  touch() {
+    emit()
+  },
   subscribe(fn: () => void) {
     listeners.add(fn)
     return () => listeners.delete(fn)
@@ -427,7 +617,20 @@ export const github = {
 
 const pendingVerify: Record<string, string> = {}
 const runTokens: Record<string, { actor: string; scopes: string[] }> = {}
-let onPushHook: ((key: string, before: Commit | undefined, after: Commit, pusher: string) => void) | undefined
+let onPushHook: ((key: string, before: Commit | undefined, after: Commit, pusher: string, branch: string) => void) | undefined
+let onPullHook: ((key: string, pr: PullRequest, action: 'opened' | 'synchronize' | 'commented' | 'merged') => void) | undefined
+export type CheckState = { name: string; state: 'success' | 'failure' | 'pending' | 'skipped'; runId: number }
+let checksProvider: ((key: string, sha: string) => CheckState[]) | undefined
+/** Eventos de pull request (Actions e o revisor automático escutam). */
+export function onGithubPull(fn: typeof onPullHook) {
+  const prev = onPullHook
+  onPullHook = (...a) => (prev?.(...a), fn?.(...a))
+}
+export const firePull = (key: string, pr: PullRequest, action: 'synchronize') => onPullHook?.(key, pr, action)
+/** O Actions informa o estado dos checks de um commit. */
+export function provideChecks(fn: typeof checksProvider) {
+  checksProvider = fn
+}
 /** Usado pelo GitHub Actions para disparar workflows a cada push. */
 export function onGithubPush(fn: typeof onPushHook) {
   onPushHook = fn

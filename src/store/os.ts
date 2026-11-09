@@ -4,6 +4,7 @@ import { Shell, type CommandEvent, type Machine } from '../engine/shell'
 import { missions, type HintCtx, type SimEvent } from '../engine/missions'
 import { github } from '../engine/github'
 import { net } from '../engine/node'
+import { team } from '../engine/team'
 import { mail } from '../engine/mail'
 import { aws } from '../engine/aws'
 import { actions } from '../engine/actions'
@@ -87,7 +88,7 @@ type OS = {
 
 let openCount = 0
 /** Estado auxiliar que também vai para o progresso salvo. */
-export const flags = { awsMail: false, ciMail: false, dockerMail: false, m6Mail: false }
+export const flags = { awsMail: false, ciMail: false, dockerMail: false, m6Mail: false, m7Mail: false }
 export const doneProjects = new Set<string>()
 export const seen = new Set<string>()
 
@@ -263,6 +264,24 @@ export const useOS = create<OS>((set, get) => ({
           { kind: 'p', text: 'Novo plano para o pipeline:\n1. test: igual a antes.\n2. build: constrói a imagem e publica no ghcr.sim, com a tag do hash do commit.\n3. deploy: docker pull da versão exata e recria o container.' },
           { kind: 'p', text: 'Bônus: com cada versão guardada no registry, rollback vira um comando.' },
           { kind: 'p', text: 'Confirma o erro no Actions antes de mexer. Primeiro a gente entende, depois conserta.' },
+        ],
+      })
+    }
+    if (idx >= 6 && !flags.m7Mail) {
+      flags.m7Mail = true
+      team.start()
+      mail.send({
+        from: 'Senku Ishigami',
+        fromAddr: 'senku@devlab.sim',
+        avatar: 1,
+        to: github.student()?.email ?? 'você',
+        subject: 'Nova regra no time: tudo entra por pull request',
+        preview: 'O pipeline está redondo. Agora falta proteger a main de nós mesmos…',
+        body: [
+          { kind: 'p', text: 'O pipeline está redondo: cada push na main vai para produção em minutos. Justamente por isso, a main não pode receber código que ninguém revisou.' },
+          { kind: 'p', text: 'Combinado do time a partir de hoje:\n1. Ninguém faz push direto na main (o GitHub vai bloquear).\n2. Cada mudança nasce num branch e vira um pull request.\n3. O CI roda no PR, e pelo menos uma pessoa aprova antes do merge.' },
+          { kind: 'p', text: 'Primeira tarefa nesse fluxo: um endpoint que diga quantas tarefas estão pendentes. O Shikamaru revisa. A Bulma também está mexendo na API, então fica de olho.' },
+          { kind: 'button', label: 'Configurações do repositório', url: 'https://github.sim/devlab/todo-api/settings/branches' },
         ],
       })
     }

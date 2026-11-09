@@ -55,7 +55,7 @@ export function MenuBar() {
               <div className="item" onClick={() => setConfirmReset(true)}>↺ Recomeçar do zero…</div>
             )}
             <div className="sep" />
-            <div className="item muted">DevOps Lab · versão 0.8</div>
+            <div className="item muted">DevOps Lab · versão 0.9</div>
           </div>
         )}
         <span className="app">{appName}</span>

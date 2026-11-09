@@ -7,6 +7,7 @@ import { AnimeAvatar, AVATAR_COUNT, GhostAvatar } from '../../components/AnimeAv
 import { Markdown } from './markdown'
 import { ActionsList, RunView, SecretsPage, StatusIcon, lastRunStatus } from './ActionsPages'
 import { docker } from '../../engine/docker'
+import { Compare, PullsList, PullView, PushedBanner } from './PullPages'
 
 const go = (u: string) => useOS.getState().openBrowser(u.startsWith('http') ? u : `https://github.sim${u}`)
 
@@ -34,10 +35,10 @@ function AuthorName({ c }: { c: Commit }) {
 }
 
 /** Último commit que alterou `path` (arquivo ou pasta). */
-function lastTouch(repo: RemoteRepo, path: string): Commit {
+function lastTouch(list: Commit[], path: string): Commit {
   const inPath = (t: Record<string, string>) => JSON.stringify(Object.entries(t).filter(([p]) => p === path || p.startsWith(path + '/')).sort())
-  for (let i = repo.commits.length - 1; i > 0; i--) if (inPath(repo.commits[i].tree) !== inPath(repo.commits[i - 1].tree)) return repo.commits[i]
-  return repo.commits[0]
+  for (let i = list.length - 1; i > 0; i--) if (inPath(list[i].tree) !== inPath(list[i - 1].tree)) return list[i]
+  return list[0]
 }
 
 // ---------- moldura ----------
@@ -599,7 +600,7 @@ function CloneButton({ repo }: { repo: RemoteRepo }) {
   )
 }
 
-function RepoHeader({ repo, tab }: { repo: RemoteRepo; tab: 'code' | 'commits' | 'actions' | 'settings' }) {
+function RepoHeader({ repo, tab }: { repo: RemoteRepo; tab: 'code' | 'commits' | 'pulls' | 'actions' | 'settings' }) {
   const base = `/${repo.owner}/${repo.name}`
   const me = github.current()
   const pending = me && github.invitationsFor(me.login).find((i) => i.repo === `${repo.owner}/${repo.name}` && i.status === 'pending')
@@ -620,6 +621,9 @@ function RepoHeader({ repo, tab }: { repo: RemoteRepo; tab: 'code' | 'commits' |
         <div className="gh-tabs">
           <span className={tab === 'code' ? 'on' : ''} onClick={() => go(base)}>‹› Código</span>
           <span className={tab === 'commits' ? 'on' : ''} onClick={() => go(`${base}/commits`)}>◷ Commits <i>{repo.commits.length}</i></span>
+          <span className={tab === 'pulls' ? 'on' : ''} onClick={() => go(`${base}/pulls`)}>
+            ⇄ Pull requests {github.pulls(`${repo.owner}/${repo.name}`).filter((p) => p.state === 'open').length > 0 && <i>{github.pulls(`${repo.owner}/${repo.name}`).filter((p) => p.state === 'open').length}</i>}
+          </span>
           <span className={tab === 'actions' ? 'on' : ''} onClick={() => go(`${base}/actions`)}>▶ Actions</span>
           {me && github.isAdmin(me.login, `${repo.owner}/${repo.name}`) && (
             <span className={tab === 'settings' ? 'on' : ''} onClick={() => go(`${base}/settings/secrets/actions`)}>⚙ Configurações</span>
@@ -630,9 +634,12 @@ function RepoHeader({ repo, tab }: { repo: RemoteRepo; tab: 'code' | 'commits' |
   )
 }
 
-function CodeView({ repo, dir, file }: { repo: RemoteRepo; dir: string; file?: string }) {
-  const head = repo.commits[repo.commits.length - 1]
+function CodeView({ repo, dir, file, branch }: { repo: RemoteRepo; dir: string; file?: string; branch: string }) {
+  const key = `${repo.owner}/${repo.name}`
+  const list = github.branchCommits(key, branch) ?? repo.commits
+  const head = list[list.length - 1]
   const base = `/${repo.owner}/${repo.name}`
+  const branches = github.branchNames(key)
   const prefix = dir ? dir + '/' : ''
   const entries = new Map<string, 'dir' | 'file'>()
   for (const p of Object.keys(head.tree)) {
@@ -642,12 +649,18 @@ function CodeView({ repo, dir, file }: { repo: RemoteRepo; dir: string; file?: s
   }
   const sorted = [...entries].sort(([a, ta], [b, tb]) => (ta === tb ? a.localeCompare(b) : ta === 'dir' ? -1 : 1))
   const crumbs = (file ?? dir).split('/').filter(Boolean)
-  const touch = file ? lastTouch(repo, file) : head
+  const touch = file ? lastTouch(list, file) : head
 
   return (
     <div className="gh-body">
+      {!dir && !file && <PushedBanner repo={repo} />}
       <div className="gh-bar">
-        <span className="gh-branch">⑂ {repo.branch}</span>
+        <select className="gh-branch" value={branch} aria-label="Branch" onChange={(e) => go(e.target.value === repo.branch ? base : `${base}/tree/${e.target.value}`)}>
+          {branches.map((b) => (
+            <option key={b} value={b}>⑂ {b}</option>
+          ))}
+        </select>
+        {branches.length > 1 && <span className="gh-muted">{branches.length} branches</span>}
         {crumbs.length > 0 && (
           <span className="gh-crumbs">
             <span className="gh-link" onClick={() => go(base)}>{repo.name}</span>
@@ -655,7 +668,7 @@ function CodeView({ repo, dir, file }: { repo: RemoteRepo; dir: string; file?: s
               <span key={i}>
                 {' / '}
                 {i < crumbs.length - 1 || !file ? (
-                  <span className="gh-link" onClick={() => go(`${base}/tree/main/${crumbs.slice(0, i + 1).join('/')}`)}>{c}</span>
+                  <span className="gh-link" onClick={() => go(`${base}/tree/${branch}/${crumbs.slice(0, i + 1).join('/')}`)}>{c}</span>
                 ) : (
                   <b>{c}</b>
                 )}
@@ -683,24 +696,24 @@ function CodeView({ repo, dir, file }: { repo: RemoteRepo; dir: string; file?: s
         <>
           <div className="gh-box">
             <div className="gh-box-head">
-              <AuthorAvatar email={head.email} /> <AuthorName c={head} /> <span className="gh-msg">{head.message}</span>
+              <AuthorAvatar email={head.email} /> <AuthorName c={head} /> <span className="gh-msg">{head.message.split('\n')[0]}</span>
               <span className="ci-inline" onClick={() => { const r = lastRunStatus(`${repo.owner}/${repo.name}`, head.hash); if (r) go(`${base}/actions/runs/${r.id}`) }}>
                 <StatusIcon s={lastRunStatus(`${repo.owner}/${repo.name}`, head.hash)} size={14} />
               </span>
               <span className="gh-muted">
-                <code>{head.hash.slice(0, 7)}</code> · {rel(head.date)} · <span className="gh-link" onClick={() => go(`${base}/commits`)}>◷ {repo.commits.length} commits</span>
+                <code>{head.hash.slice(0, 7)}</code> · {rel(head.date)} · <span className="gh-link" onClick={() => go(`${base}/commits`)}>◷ {list.length} commits</span>
               </span>
             </div>
             {dir && (
-              <div className="gh-row" onClick={() => go(dir.includes('/') ? `${base}/tree/main/${dir.split('/').slice(0, -1).join('/')}` : base)}>
+              <div className="gh-row" onClick={() => go(dir.includes('/') ? `${base}/tree/${branch}/${dir.split('/').slice(0, -1).join('/')}` : branch === repo.branch ? base : `${base}/tree/${branch}`)}>
                 <span className="gh-name">..</span>
               </div>
             )}
             {sorted.map(([name, type]) => {
               const path = prefix + name
-              const c = lastTouch(repo, path)
+              const c = lastTouch(list, path)
               return (
-                <div key={name} className="gh-row" onClick={() => go(`${base}/${type === 'dir' ? 'tree' : 'blob'}/main/${path}`)}>
+                <div key={name} className="gh-row" onClick={() => go(`${base}/${type === 'dir' ? 'tree' : 'blob'}/${branch}/${path}`)}>
                   <span className="gh-name">
                     {type === 'dir' ? <FolderIcon size={16} /> : <FileIcon size={16} />} <span className="gh-link">{name}</span>
                   </span>
@@ -781,7 +794,7 @@ function CommitsView({ repo }: { repo: RemoteRepo }) {
           <div key={c.hash} className={`gh-commit ${i === 0 ? 'newest' : ''}`}>
             <div>
               <div className="gh-msg">
-                {c.message}{' '}
+                {c.message.split('\n')[0]}{' '}
                 <span className="ci-inline" onClick={() => { const r = lastRunStatus(key, c.hash); if (r) go(`/${key}/actions/runs/${r.id}`) }}>
                   <StatusIcon s={lastRunStatus(key, c.hash)} size={14} />
                 </span>
@@ -811,7 +824,22 @@ export function GitHubPage({ path, query }: { path: string; query: URLSearchPara
   if (parts.length === 1) return <Profile login={parts[0]} />
   const repo = github.get(`${parts[0]}/${parts[1]}`)
   if (!repo) return <NotFound />
-  const [, , kind, , ...rest] = parts
+  const [, , kind] = parts
+  // /tree/<branch>/<caminho>: o nome do branch pode ter "/", então pega o maior prefixo que é um branch
+  let branch = repo.branch
+  let rest = parts.slice(4)
+  if (kind === 'tree' || kind === 'blob') {
+    const after = parts.slice(3)
+    const names = github.branchNames(`${repo.owner}/${repo.name}`)
+    for (let i = after.length; i > 0; i--) {
+      const cand = after.slice(0, i).join('/')
+      if (names.includes(cand)) {
+        branch = cand
+        rest = after.slice(i)
+        break
+      }
+    }
+  }
   if (kind === 'pkgs')
     return (
       <Frame>
@@ -820,6 +848,23 @@ export function GitHubPage({ path, query }: { path: string; query: URLSearchPara
       </Frame>
     )
   if (kind === 'invitations') return <RequireLogin><Invitation repo={repo} /></RequireLogin>
+  if (kind === 'pulls' || kind === 'pull' || kind === 'compare') {
+    const tail = parts.slice(3).join('/')
+    return (
+      <Frame>
+        <RepoHeader repo={repo} tab="pulls" />
+        {kind === 'pulls' ? (
+          <PullsList repo={repo} />
+        ) : kind === 'compare' ? (
+          <Compare repo={repo} spec={tail} />
+        ) : parts[3] === 'new' ? (
+          <Compare repo={repo} spec={`${repo.branch}...${parts.slice(4).join('/')}`} />
+        ) : (
+          <PullView repo={repo} n={Number(parts[3])} tab={parts[4] === 'commits' ? 'commits' : parts[4] === 'files' ? 'files' : 'conversation'} />
+        )}
+      </Frame>
+    )
+  }
   if (kind === 'actions')
     return (
       <Frame>
@@ -833,7 +878,7 @@ export function GitHubPage({ path, query }: { path: string; query: URLSearchPara
       <RequireLogin>
         <Frame>
           <RepoHeader repo={repo} tab="settings" />
-          {ok ? <SecretsPage repo={repo} /> : <div className="gh-center"><h2>404 · Somente administradores do repositório podem ver as configurações.</h2></div>}
+          {ok ? <SecretsPage repo={repo} initial={parts[3] === 'branches' ? 'branches' : parts[3] === 'pages' ? 'pages' : 'secrets'} /> : <div className="gh-center"><h2>404 · Somente administradores do repositório podem ver as configurações.</h2></div>}
         </Frame>
       </RequireLogin>
     )
@@ -844,10 +889,10 @@ export function GitHubPage({ path, query }: { path: string; query: URLSearchPara
       <RepoHeader repo={repo} tab={kind === 'commits' ? 'commits' : 'code'} />
       {kind === 'commits' ? (
         <CommitsView repo={repo} />
-      ) : kind === 'blob' && repo.commits[repo.commits.length - 1].tree[sub] !== undefined ? (
-        <CodeView repo={repo} dir="" file={sub} />
+      ) : kind === 'blob' && github.branchHead(`${repo.owner}/${repo.name}`, branch)?.tree[sub] !== undefined ? (
+        <CodeView repo={repo} dir="" file={sub} branch={branch} />
       ) : (
-        <CodeView repo={repo} dir={kind === 'tree' ? sub : ''} />
+        <CodeView repo={repo} dir={kind === 'tree' ? sub : ''} branch={branch} />
       )}
     </Frame>
   )

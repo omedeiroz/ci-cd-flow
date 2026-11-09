@@ -3,7 +3,7 @@
 import { load } from 'js-yaml'
 import { dir, VFS } from './fs'
 import { Shell, type Machine } from './shell'
-import { github, onGithubPush, type Commit, type Tree } from './github'
+import { github, onGithubPull, onGithubPush, provideChecks, type Commit, type PullRequest, type Tree } from './github'
 import { registerRepo } from './git'
 import { mail } from './mail'
 
@@ -38,8 +38,10 @@ export type Run = {
   created: number
   ended?: number
   error?: string
-  event: 'push' | 'workflow_dispatch' | 'schedule'
+  event: 'push' | 'workflow_dispatch' | 'schedule' | 'pull_request'
   artifacts: Record<string, Tree>
+  ref?: string // branch do commit (padrão: main)
+  pr?: number
 }
 
 type StepDef = { name?: string; uses?: string; run?: string; with?: Record<string, unknown>; if?: string }
@@ -121,13 +123,14 @@ export const actions = {
 
 // ---------- gatilhos ----------
 
-function triggersOnPush(on: unknown, branch: string): boolean {
-  if (on === 'push') return true
-  if (Array.isArray(on)) return on.includes('push')
-  if (on && typeof on === 'object' && 'push' in on) {
-    const push = (on as Record<string, unknown>).push as { branches?: string[] } | null
+const globMatch = (pat: string, b: string) => pat === b || pat === '*' && !b.includes('/') || pat === '**' || (pat.endsWith('/**') && b.startsWith(pat.slice(0, -2))) || (pat.endsWith('/*') && b.startsWith(pat.slice(0, -1)) && !b.slice(pat.length - 1).includes('/'))
+function triggersOn(on: unknown, event: 'push' | 'pull_request', branch: string): boolean {
+  if (on === event) return true
+  if (Array.isArray(on)) return on.includes(event)
+  if (on && typeof on === 'object' && event in on) {
+    const push = (on as Record<string, unknown>)[event] as { branches?: string[] } | null
     if (!push?.branches) return true
-    return push.branches.some((b) => b === branch || b === '*' || b === '**')
+    return push.branches.some((b) => globMatch(String(b), branch))
   }
   return false
 }
@@ -159,8 +162,10 @@ function buildJobs(def: WorkflowDef): JobRun[] {
 
 const CRON = /^(\S+\s+){4}\S+$/
 
-function startWorkflow(repo: string, path: string, content: string, commit: Commit, actor: string, event: Run['event']): string | null {
+function startWorkflow(repo: string, path: string, content: string, commit: Commit, actor: string, event: Run['event'], ref = 'main', pr?: PullRequest): string | null {
   const base = {
+    ref,
+    pr: pr?.number,
     id: seq++,
     number: (numbers[repo] = (numbers[repo] ?? 0) + 1),
     attempt: 1,
@@ -186,7 +191,7 @@ function startWorkflow(repo: string, path: string, content: string, commit: Comm
     return null
   }
   const ok =
-    event === 'push' ? triggersOnPush(def.on, 'main') : event === 'workflow_dispatch' ? hasTrigger(def.on, 'workflow_dispatch') : hasTrigger(def.on, 'schedule')
+    event === 'push' ? triggersOn(def.on, 'push', ref) : event === 'pull_request' ? triggersOn(def.on, 'pull_request', pr!.base) : event === 'workflow_dispatch' ? hasTrigger(def.on, 'workflow_dispatch') : hasTrigger(def.on, 'schedule')
   if (!ok) {
     numbers[repo]--
     seq--
@@ -223,9 +228,31 @@ export function cronOf(on: unknown): string | null {
 
 const workflowFiles = (commit: Commit) => Object.entries(commit.tree).filter(([p]) => /^\.github\/workflows\/[^/]+\.ya?ml$/.test(p))
 
-onGithubPush((repo, _before, after, pusher) => {
-  for (const [path, content] of workflowFiles(after)) startWorkflow(repo, path, content, after, pusher, 'push')
+onGithubPush((repo, _before, after, pusher, branch) => {
+  for (const [path, content] of workflowFiles(after)) startWorkflow(repo, path, content, after, pusher, 'push', branch)
 })
+onGithubPull((repo, pr, action) => {
+  if (action !== 'opened' && action !== 'synchronize') return
+  const head = github.branchHead(repo, pr.head)
+  if (!head) return
+  for (const [path, content] of workflowFiles(head)) startWorkflow(repo, path, content, head, pr.author, 'pull_request', pr.head, pr)
+})
+// checks de um commit (usados na página do pull request e pela proteção de branch)
+provideChecks((repo, sha) =>
+  runs
+    .filter((r) => r.repo === repo && r.commit.hash === sha)
+    .sort((a, b) => b.id - a.id)
+    .filter((r, i, all) => all.findIndex((x) => x.file === r.file && x.event === r.event) === i)
+    .flatMap((r) =>
+      r.jobs.length
+        ? r.jobs.map((j) => ({
+            name: `${r.workflow} / ${j.name} (${r.event})`,
+            state: j.status !== 'completed' ? ('pending' as const) : j.conclusion === 'success' ? ('success' as const) : j.conclusion === 'skipped' ? ('skipped' as const) : ('failure' as const),
+            runId: r.id,
+          }))
+        : [{ name: r.workflow, state: r.status !== 'completed' ? ('pending' as const) : r.conclusion === 'success' ? ('success' as const) : ('failure' as const), runId: r.id }],
+    ),
+)
 
 // agendamentos (cron): no simulador, cada workflow agendado roda a cada 2 minutos
 setInterval(() => {
@@ -243,13 +270,14 @@ setInterval(() => {
 }, 120_000)
 
 function notifyFailure(run: Run) {
+  if (run.event === 'pull_request' && github.user(run.actor)?.bot) return
   const sha = run.commit.hash.slice(0, 7)
   mail.send({
     from: 'GitHub',
     fromAddr: 'notifications@github.sim',
     logo: 'github',
     to: run.actor || 'você',
-    subject: `[${run.repo}] Run failed: ${run.workflow} - main (${sha})`,
+    subject: `[${run.repo}] Run failed: ${run.workflow} - ${run.event === 'pull_request' ? `PR #${run.pr}` : (run.ref ?? 'main')} (${sha})`,
     preview: `${run.workflow}: Some jobs were not successful`,
     body: [
       { kind: 'p', text: `❌ ${run.workflow}: Some jobs were not successful` },
@@ -278,7 +306,7 @@ async function execute(run: Run, def: WorkflowDef) {
         if (deps.some((d) => d.conclusion !== 'success')) {
           job.status = 'completed'
           job.conclusion = 'skipped'
-        } else if (def.jobs![job.defKey].if && !evalIf(def.jobs![job.defKey].if!)) {
+        } else if (def.jobs![job.defKey].if && !evalIf(def.jobs![job.defKey].if!, run)) {
           job.status = 'completed'
           job.conclusion = 'skipped'
         } else await runJob(run, job, def.jobs![job.defKey], def)
@@ -294,9 +322,13 @@ async function execute(run: Run, def: WorkflowDef) {
   emit()
 }
 
-function evalIf(expr: string): boolean {
+const refOf = (run: Run) => (run.event === 'pull_request' ? `refs/pull/${run.pr}/merge` : `refs/heads/${run.ref ?? 'main'}`)
+const refNameOf = (run: Run) => (run.event === 'pull_request' ? `${run.pr}/merge` : (run.ref ?? 'main'))
+function evalIf(expr: string, run: Run): boolean {
   const e = expr.replace(/^\$\{\{\s*|\s*\}\}$/g, '').trim()
-  const ctx: Record<string, string> = { 'github.ref': 'refs/heads/main', 'github.ref_name': 'main', 'github.event_name': 'push' }
+  const ctx: Record<string, string> = { 'github.ref': refOf(run), 'github.ref_name': refNameOf(run), 'github.event_name': run.event, 'github.head_ref': run.event === 'pull_request' ? (run.ref ?? '') : '' }
+  const parts = e.split(/\s*&&\s*/)
+  if (parts.length > 1) return parts.every((p) => evalIf(p, run))
   const m = e.match(/^([\w.]+)\s*(==|!=)\s*'([^']*)'$/)
   if (m) return m[2] === '==' ? ctx[m[1]] === m[3] : ctx[m[1]] !== m[3]
   if (e === 'always()' || e === 'success()') return true
@@ -353,8 +385,10 @@ async function runJob(run: Run, job: JobRun, def: JobDef, wf: WorkflowDef) {
       if (sm) return secrets[sm[1]]?.value ?? ''
       const ctx: Record<string, string> = {
         'github.sha': run.commit.hash,
-        'github.ref': 'refs/heads/main',
-        'github.ref_name': 'main',
+        'github.ref': refOf(run),
+        'github.ref_name': refNameOf(run),
+        'github.head_ref': run.event === 'pull_request' ? (run.ref ?? '') : '',
+        'github.base_ref': run.event === 'pull_request' ? 'main' : '',
         'github.repository': run.repo,
         'github.actor': run.actor,
         'github.run_number': String(run.number),
@@ -464,15 +498,15 @@ async function runAction(
   const { log } = c
   if (name === 'actions/checkout') {
     await sleep(1200)
-    const repo = github.get(c.run.repo)!
-    const idx = repo.commits.findIndex((x) => x.hash === c.run.commit.hash)
+    const list = github.branchCommits(c.run.repo, c.run.ref ?? 'main') ?? github.get(c.run.repo)!.commits
+    const idx = list.findIndex((x) => x.hash === c.run.commit.hash)
     log(`Syncing repository: ${c.run.repo}`)
     log('Getting Git version info')
     log('Initializing the repository')
     log(`Fetching the repository`)
     log(`Determining the checkout info`)
     c.fs.writeTree(c.workspace, c.run.commit.tree)
-    registerRepo(c.fs, c.workspace, c.run.repo, repo.commits.slice(0, idx + 1))
+    registerRepo(c.fs, c.workspace, c.run.repo, idx >= 0 ? list.slice(0, idx + 1) : [c.run.commit], c.run.event === 'pull_request' ? 'main' : (c.run.ref ?? 'main'))
     log(`HEAD is now at ${c.run.commit.hash.slice(0, 7)} ${c.run.commit.message}`)
     return true
   }

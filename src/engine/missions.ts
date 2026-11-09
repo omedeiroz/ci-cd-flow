@@ -10,6 +10,7 @@ import { editor } from './editor'
 import { actions } from './actions'
 import { loadTodos } from './node'
 import { docker } from './docker'
+import { documents, team, TEAM_REPO } from './team'
 
 export type SimEvent =
   | ({ kind: 'cmd' } & CommandEvent)
@@ -47,6 +48,7 @@ export type Mission = {
 }
 
 const HOME = '/home/dev'
+const studentPr = () => github.pulls(TEAM_REPO).filter((p) => p.author === github.student()?.login).sort((a, b) => b.number - a.number)[0]
 const repoRoot = (fs: VFS) => allRepos(fs).find((r) => r.remoteKey === 'devlab/todo-api')?.root
 const ORIGINAL_TODOS = JSON.stringify([
   { id: 1, title: 'Aprender o terminal', done: true },
@@ -116,6 +118,31 @@ jobs:
       - name: Trocar o container
         run: |
           ssh -o StrictHostKeyChecking=no -i ~/.ssh/deploy.pem ubuntu@\${{ secrets.EC2_HOST }} "docker pull $IMAGE:\${{ github.sha }} && docker rm -f todo; docker run -d -p 3000:3000 --restart unless-stopped --name todo $IMAGE:\${{ github.sha }}"
+`
+
+/** Workflow da Missão 7: roda os testes em todo pull request; build e deploy só no push para a main. */
+export const PR_CI_YML = DOCKER_CI_YML.replace(
+  'on:\n  push:\n    branches: [main]\n',
+  'on:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n',
+).replace("    needs: test\n    runs-on: ubuntu-latest\n", "    needs: test\n    if: github.event_name == 'push'\n    runs-on: ubuntu-latest\n")
+
+export const FEATURE_TODOS = `
+function pendingCount() {
+  return todos.filter((t) => !t.done).length
+}
+
+module.exports.pendingCount = pendingCount
+`
+export const FEATURE_TEST = `
+const { pendingCount } = require('../src/todos')
+
+test('conta as tarefas pendentes', () => {
+  assert.strictEqual(pendingCount(), listTodos().filter((t) => !t.done).length)
+})
+`
+export const FEATURE_ROUTE = `
+const { pendingCount } = require('./todos')
+app.get('/todos/pendentes', (req, res) => res.json({ pendentes: pendingCount() }))
 `
 
 export const CI_YML = `name: CI
@@ -1009,6 +1036,274 @@ export const missions: Mission[] = [
           )
         },
         success: '🎉 Rollback em segundos. Você tem um pipeline completo: testes, imagem versionada, deploy automático e volta rápida. Isso é CI/CD de verdade.',
+      },
+    ],
+  },
+  {
+    id: 'm7-pull-requests',
+    title: 'Missão 7 · Branches e Pull Requests',
+    short: 'Branches e PRs',
+    summary:
+      'Num time, ninguém mexe direto na main. Você vai proteger o branch principal, criar um branch para uma funcionalidade nova, abrir um pull request, passar pela revisão de código e pelos checks do CI, resolver um conflito com a mudança de uma colega e só então mesclar. O deploy continua automático, mas agora só código revisado chega em produção.',
+    steps: [
+      {
+        id: 'm7-mail',
+        title: 'Leia o e-mail do Senku',
+        body: ['Abra o Mail: o time vai mudar a forma de trabalhar.'],
+        check: ({ event }) => event.kind === 'ui' && event.name.startsWith('mail:') && event.name.includes('pull request'),
+        success: 'Regra nova: tudo entra por pull request. Vamos fazer o GitHub garantir isso.',
+      },
+      {
+        id: 'protect',
+        title: 'Proteja o branch main',
+        body: [
+          'No GitHub, abra Configurações › Branches e adicione uma regra para `main` com estas opções:',
+          '• Exigir pull request antes do merge, com 1 aprovação\n• Exigir que os checks de status passem\n\nIsso é proteção de branch: nem quem é administrador consegue mandar commits direto para a main.',
+        ],
+        browse: 'github.sim/devlab/todo-api/settings/branches',
+        check: () => {
+          const p = github.protection(TEAM_REPO, 'main')
+          return !!p && p.requirePr && p.approvals >= 1 && p.requireChecks
+        },
+        success: 'A main está protegida. Agora todo código passa por revisão e por testes.',
+      },
+      {
+        id: 'pr-workflow',
+        title: 'Rode o CI também nos pull requests',
+        body: [
+          'Hoje o workflow só roda em push na main. Para a revisão mostrar se os testes passam, ele precisa rodar em cada pull request também.',
+          'Abra `.github/workflows/ci.yml` e insira a versão abaixo. Mudou pouco:\n• gatilho novo `pull_request` para a main\n• no job `build`, `if: github.event_name == \'push\'`: no PR só testamos; imagem e deploy só depois do merge (o `deploy` depende do build, então também fica de fora)',
+          'Salve e faça commit (ainda sem push).',
+        ],
+        snippet: { file: '.github/workflows/ci.yml', code: PR_CI_YML, mode: 'replace' },
+        hint: 'git commit -am "ci: testes em pull requests"',
+        check: ({ fs }) => {
+          const root = repoRoot(fs)
+          const r = root ? findRepo(fs, root) : null
+          const yml = r?.commits[r.commits.length - 1]?.tree['.github/workflows/ci.yml'] ?? ''
+          try {
+            const y = load(yml) as { on?: Record<string, unknown>; jobs?: Record<string, { if?: string }> }
+            return !!y?.on && typeof y.on === 'object' && 'pull_request' in y.on && /event_name\s*==\s*'push'/.test(y.jobs?.build?.if ?? '')
+          } catch {
+            return false
+          }
+        },
+        success: 'Commit feito. Agora tente enviar como sempre.',
+      },
+      {
+        id: 'direct-push',
+        title: 'Tente o push direto na main',
+        body: ['Rode `git push`. Com a proteção ligada, o GitHub vai recusar. Leia a mensagem com calma: ela diz exatamente o que fazer.'],
+        hint: 'git push',
+        check: ({ fs, cwd, event }) => {
+          if (event.kind !== 'cmd' || event.name !== 'git' || event.args[0] !== 'push' || event.code === 0) return false
+          const r = findRepo(fs, cwd)
+          return !!r && r.branch === 'main' && !!github.protection(TEAM_REPO, 'main')?.requirePr && aheadBy(r) > 0
+        },
+        success: 'GH006: "Changes must be made through a pull request". Era o esperado.',
+      },
+      {
+        id: 'branch',
+        title: 'Crie um branch para a funcionalidade',
+        body: [
+          'Branch é uma linha paralela de commits. Você trabalha nela à vontade, e a main só recebe o resultado depois da revisão.',
+          'Crie o branch `feat/pendentes` a partir de onde você está. O commit do workflow vem junto, porque o branch novo começa no seu último commit.',
+          'Confira com `git branch`: o asterisco marca o branch atual.',
+        ],
+        hint: 'git switch -c feat/pendentes',
+        check: ({ fs }) => {
+          const root = repoRoot(fs)
+          const r = root ? findRepo(fs, root) : null
+          return !!r && r.branch !== 'main'
+        },
+        success: 'Você está num branch próprio. Pode mexer sem medo.',
+      },
+      {
+        id: 'feature',
+        title: 'Escreva a funcionalidade',
+        body: [
+          'O time quer saber quantas tarefas faltam. Abra `src/todos.js` no editor e adicione a função `pendingCount` no fim do arquivo (o botão "Inserir no editor" acrescenta o trecho). Salve.',
+        ],
+        snippet: { file: 'src/todos.js', code: FEATURE_TODOS, mode: 'append' },
+        check: ({ fs }) => {
+          const root = repoRoot(fs)
+          try {
+            return !!root && /pendingCount/.test(fs.read(`${root}/src/todos.js`))
+          } catch {
+            return false
+          }
+        },
+        success: 'Função criada.',
+      },
+      {
+        id: 'feat-test',
+        title: 'Teste a funcionalidade',
+        body: ['Código novo vem com teste. Acrescente o teste abaixo em `tests/todos.test.js`, salve e rode `npm test` no terminal.'],
+        snippet: { file: 'tests/todos.test.js', code: FEATURE_TEST, mode: 'append' },
+        hint: 'npm test',
+        check: ({ fs, event }) => {
+          const root = repoRoot(fs)
+          if (!root || !ran(event, 'npm', 'test')) return false
+          try {
+            return /pendingCount/.test(fs.read(`${root}/tests/todos.test.js`))
+          } catch {
+            return false
+          }
+        },
+        success: 'Testes verdes, inclusive o novo.',
+      },
+      {
+        id: 'route',
+        title: 'Exponha o endpoint',
+        body: ['Por fim, a rota HTTP: acrescente o trecho abaixo no fim de `src/server.js` e salve. Ela responde em `/todos/pendentes`.'],
+        snippet: { file: 'src/server.js', code: FEATURE_ROUTE, mode: 'append' },
+        check: ({ fs }) => {
+          const root = repoRoot(fs)
+          try {
+            return !!root && /\/todos\/pendentes/.test(fs.read(`${root}/src/server.js`))
+          } catch {
+            return false
+          }
+        },
+        success: 'Funcionalidade pronta. Hora de publicar o branch.',
+      },
+      {
+        id: 'push-branch',
+        title: 'Publique o branch',
+        body: [
+          'Faça commit de tudo e tente `git push`. O git responde que o branch não tem *upstream*: ele ainda não sabe para qual branch do GitHub enviar.',
+          '`git push -u origin feat/pendentes` cria o branch no GitHub e liga os dois (`-u` = upstream). Depois disso, `git push` e `git pull` sozinhos já funcionam neste branch.',
+        ],
+        hint: 'git add . && git commit -m "feat: contador de tarefas pendentes" && git push -u origin feat/pendentes',
+        check: ({ fs }) => {
+          const root = repoRoot(fs)
+          const r = root ? findRepo(fs, root) : null
+          if (!r || r.branch === 'main' || r.upstreams?.[r.branch] !== r.branch) return false
+          const t = github.branchHead(TEAM_REPO, r.branch)?.tree ?? {}
+          return /pendingCount/.test(t['src/todos.js'] ?? '') && /\/todos\/pendentes/.test(t['src/server.js'] ?? '')
+        },
+        success: 'Branch no GitHub. Repare no link que o próprio git mostrou para abrir o pull request.',
+      },
+      {
+        id: 'open-pr',
+        title: 'Abra o pull request',
+        body: [
+          'No GitHub, o repositório mostra um aviso amarelo com o seu branch: clique em "Comparar e abrir pull request" (ou vá na aba Pull requests › Novo).',
+          'Escreva um título claro e, na descrição, o que mudou e como testar. Revise a aba de arquivos e clique em "Criar pull request".',
+        ],
+        browse: 'github.sim/devlab/todo-api/pulls',
+        check: () => github.pulls(TEAM_REPO).some((p) => p.author === github.student()?.login),
+        success: 'PR aberto! O CI já começou a rodar e o Shikamaru foi chamado para revisar.',
+      },
+      {
+        id: 'pr-checks',
+        title: 'Acompanhe os checks',
+        body: [
+          'Na página do PR, veja a caixa de checks: o job Testes roda no código do seu branch. Build e Deploy aparecem como pulados, como você configurou.',
+          'Com a proteção, o botão de merge só libera quando os checks passam e alguém aprova.',
+        ],
+        check: ({ seen }) => {
+          if (!seen.has('gh:pull')) return false
+          const pr = studentPr()
+          if (!pr) return false
+          const st = github.pullStatus(TEAM_REPO, pr.number)
+          return st.checks.length > 0 && st.checks.every((c) => c.state !== 'pending') && st.checks.some((c) => c.state === 'success')
+        },
+        success: 'Checks verdes no seu branch, antes de chegar na main. É para isso que serve o CI em pull requests.',
+      },
+      {
+        id: 'review',
+        title: 'Atenda à revisão',
+        body: [
+          'O Shikamaru revisou e pediu uma alteração (veja no PR ou no Mail). Revisão de código não é bronca: é o time garantindo qualidade junto.',
+          'Abra o `README.md` e, na seção "Endpoints", adicione logo depois da linha do `/health`:\n`- GET /todos/pendentes — quantidade de tarefas pendentes`',
+          'Salve, faça commit e `git push`. O PR atualiza sozinho com o commit novo (e os checks rodam de novo).',
+        ],
+        hint: 'git commit -am "docs: documenta /todos/pendentes" && git push',
+        check: () => {
+          const pr = studentPr()
+          return !!pr && documents(github.branchHead(TEAM_REPO, pr.head)?.tree['README.md'])
+        },
+        success: 'README documentado e enviado.',
+      },
+      {
+        id: 'conflict',
+        title: 'Traga a main para o seu branch',
+        body: [
+          'Enquanto você trabalhava, a Bulma mesclou o PR dela, que também mexeu na seção Endpoints do README. O seu PR agora diz que tem conflitos.',
+          'Conflito acontece quando duas pessoas mudam as mesmas linhas: o git não adivinha qual versão vale, então você decide. Traga a main atualizada para o seu branch:',
+          '`git fetch origin` baixa as novidades sem mexer nos seus arquivos. `git merge origin/main` junta a main no seu branch.',
+        ],
+        hint: 'git fetch origin && git merge origin/main',
+        check: ({ fs }) => {
+          const root = repoRoot(fs)
+          const r = root ? findRepo(fs, root) : null
+          const main = github.branchHead(TEAM_REPO, 'main')
+          return !!r && !!main && team.state().bulma === 'merged' && r.branch !== 'main' && (!!r.merging || r.commits.some((c) => c.hash === main.hash))
+        },
+        success: 'Merge iniciado. Se apareceu CONFLITO, o próximo passo é resolver.',
+      },
+      {
+        id: 'resolve',
+        title: 'Resolva o conflito e envie',
+        body: [
+          'Abra o `README.md`. O git marcou o trecho em conflito:\n`<<<<<<< HEAD` (a sua versão)\n`=======`\n`>>>>>>> origin/main` (a versão da main)',
+          'Aqui as duas linhas valem: deixe as duas e apague as três linhas de marcadores. Salve.',
+          'Depois marque como resolvido com `git add README.md`, conclua com `git commit` (a mensagem de merge já vem pronta) e `git push`. Se não houve conflito, é só o `git push`.',
+        ],
+        hint: 'git add README.md && git commit --no-edit && git push',
+        check: () => {
+          const pr = studentPr()
+          if (!pr) return false
+          const st = github.pullStatus(TEAM_REPO, pr.number)
+          const readme = st.headTip?.tree['README.md'] ?? ''
+          return st.upToDate && !st.conflicts.length && !/^(<{7}|={7}|>{7})/m.test(readme) && documents(readme) && /GET \/version/.test(readme)
+        },
+        success: 'Conflito resolvido: o branch tem a sua mudança e a da Bulma.',
+      },
+      {
+        id: 'merge',
+        title: 'Faça o merge do pull request',
+        body: [
+          'Volte ao PR. Quando aparecer aprovação do Shikamaru e os checks estiverem verdes, o botão "Merge pull request" libera. Clique e confirme.',
+          'Depois clique em "Excluir branch": o trabalho já está na main, o branch remoto não serve mais.',
+        ],
+        check: () => {
+          const pr = github.pulls(TEAM_REPO).find((p) => p.author === github.student()?.login && p.state === 'merged')
+          return !!pr && !!pr.headDeleted
+        },
+        success: 'Mesclado! O merge na main é um push, e o push dispara o pipeline completo.',
+      },
+      {
+        id: 'deploy-pr',
+        title: 'Veja o deploy da main',
+        body: [
+          'Abra o Actions: o merge gerou um run com evento push na main, agora com test → build → deploy.',
+          'Quando ficar verde, abra `http://<IP-público>:3000/todos/pendentes` no navegador.',
+        ],
+        browse: ({ ip }) => `http://${ip || '<IP-público>'}:3000/todos/pendentes`,
+        check: ({ event }) => {
+          if (event.kind !== 'browse' || !event.url.includes(':3000/todos/pendentes')) return false
+          const pr = github.pulls(TEAM_REPO).find((p) => p.author === github.student()?.login && p.state === 'merged')
+          return !!pr && actions.runs(TEAM_REPO).some((r) => r.event === 'push' && r.conclusion === 'success' && r.jobs.length >= 3 && r.created >= (pr.mergedAt ?? 0))
+        },
+        success: 'A funcionalidade revisada está em produção.',
+      },
+      {
+        id: 'cleanup',
+        title: 'Arrume a casa',
+        body: [
+          'Na sua máquina, volte para a main, traga o merge e apague o branch local, que já foi mesclado:',
+          '`git branch -d` só apaga branches cujo trabalho já está na main. Se não estiver, o git avisa e não deixa (proteção contra perder commits).',
+        ],
+        hint: 'git switch main && git pull && git branch -d feat/pendentes',
+        check: ({ fs }) => {
+          const root = repoRoot(fs)
+          const r = root ? findRepo(fs, root) : null
+          const pr = github.pulls(TEAM_REPO).find((p) => p.author === github.student()?.login && p.state === 'merged')
+          return !!r && !!pr && r.branch === 'main' && !r.branches?.[pr.head] && r.commits.some((c) => c.hash === pr.mergeCommit)
+        },
+        success: '🎉 Fluxo completo de time: branch, pull request, CI no PR, revisão, conflito resolvido, merge e deploy automático. É assim que a maioria das empresas trabalha.',
       },
     ],
   },
