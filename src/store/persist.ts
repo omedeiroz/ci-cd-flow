@@ -1,5 +1,5 @@
-// Progresso salvo: guarda o estado inteiro do simulador no navegador (localStorage)
-// e restaura ao abrir. Sessões ssh e pipelines em andamento não sobrevivem ao recarregar.
+// Progresso salvo: guarda o estado inteiro do simulador no navegador (localStorage), em 3 slots.
+// Sessões ssh e pipelines em andamento não sobrevivem ao recarregar.
 import { vfsDump, type VfsJSON } from '../engine/fs'
 import { machineAssign, machineDump, type MachineJSON } from '../engine/shell'
 import { gitDump, gitLoad, type GitJSON } from '../engine/git'
@@ -15,13 +15,66 @@ import { github } from '../engine/github'
 import { team, teamDump, teamLoad } from '../engine/team'
 import { doneProjects, flags, localFs, localMachine, seen, shell, useOS, type AppId, type Win } from './os'
 import type { VFS } from '../engine/fs'
+import { missions } from '../engine/missions'
 
-const KEY = 'devops-lab:save:v1'
+const LEGACY_KEY = 'devops-lab:save:v1'
+const META_KEY = 'devops-lab:slots'
+const ACTIVE_KEY = 'devops-lab:active'
+const BOOT_KEY = 'devops-lab:boot'
+const slotKey = (id: number) => `devops-lab:slot:${id}`
 const VERSION = 1
+export const SLOT_IDS = [1, 2, 3]
+const FORMAT = 'devops-lab-save'
+
+export type Profile = { name: string; avatar: number }
+export type SlotMeta = {
+  id: number
+  profile: Profile
+  missionIdx: number
+  stepIdx: number
+  missionDone: boolean
+  openWorld: boolean
+  pct: number
+  playedMs: number
+  savedAt: number
+  created: number
+}
+/** Ação a executar logo depois de recarregar a página (trocar de save exige um motor limpo). */
+export type Boot = { action: 'continue'; slot: number } | { action: 'new'; slot: number; profile: Profile; mission: number }
+
+/** Porcentagem do tutorial concluída. */
+export function progressOf(missionIdx: number, stepIdx: number, missionDone: boolean, openWorld: boolean) {
+  if (openWorld) return 100
+  const total = missions.reduce((n, m) => n + m.steps.length, 0)
+  const done = missions.slice(0, missionIdx).reduce((n, m) => n + m.steps.length, 0) + (missionDone ? missions[missionIdx].steps.length : stepIdx)
+  return Math.round((done / total) * 100)
+}
+
+const store = {
+  get(k: string) {
+    try {
+      return localStorage.getItem(k)
+    } catch {
+      return null
+    }
+  },
+  set(k: string, v: string) {
+    localStorage.setItem(k, v)
+  },
+  del(k: string) {
+    try {
+      localStorage.removeItem(k)
+    } catch {
+      /* sem acesso */
+    }
+  },
+}
 
 type Save = {
   version: number
   savedAt: number
+  profile?: Profile
+  playedMs?: number
   local: { fs: VfsJSON; machine: MachineJSON; git: GitJSON; shell: { cwd: string; history: string[]; env: Record<string, string> } }
   instancesGit: Record<string, GitJSON>
   github: ReturnType<typeof githubDump>
@@ -62,6 +115,8 @@ function snapshot(): Save {
   return {
     version: VERSION,
     savedAt: Date.now(),
+    profile: persist.profile ?? undefined,
+    playedMs: playedNow(),
     local: { fs: vfsDump(localFs), machine: machineDump(localMachine), git: gitDump(localFs), shell: { cwd: shell.cwd, history: shell.history.slice(-200), env: shell.env } },
     instancesGit: Object.fromEntries(aws.instances().map((i) => [i.id, gitDump(i.fs)])),
     github: githubDump(),
@@ -129,29 +184,139 @@ function apply(d: Save) {
 
 let disabled = false
 let timer: ReturnType<typeof setTimeout> | null = null
+let playedBase = 0
+let sessionStart = Date.now()
+let paused = false
+const playedNow = () => playedBase + (paused ? 0 : Date.now() - sessionStart)
+
+function readMeta(): Record<number, SlotMeta> {
+  try {
+    return JSON.parse(store.get(META_KEY) ?? '{}') as Record<number, SlotMeta>
+  } catch {
+    return {}
+  }
+}
+function writeMeta(m: Record<number, SlotMeta>) {
+  try {
+    store.set(META_KEY, JSON.stringify(m))
+  } catch {
+    /* o save em si já avisa do erro */
+  }
+}
+function metaOf(id: number, d: Save): SlotMeta {
+  const ui = d.ui
+  const prev = readMeta()[id]
+  return {
+    id,
+    profile: d.profile ?? prev?.profile ?? { name: 'Aluno(a)', avatar: 7 },
+    missionIdx: ui.missionIdx,
+    stepIdx: ui.stepIdx,
+    missionDone: ui.missionDone,
+    openWorld: ui.openWorld,
+    pct: progressOf(ui.missionIdx, ui.stepIdx, ui.missionDone, ui.openWorld),
+    playedMs: d.playedMs ?? 0,
+    savedAt: d.savedAt,
+    created: prev?.created ?? d.savedAt,
+  }
+}
+/** Lê e valida um save (de um slot ou de um arquivo importado). */
+function parseSave(raw: string | null): Save | null {
+  if (!raw) return null
+  try {
+    let d = JSON.parse(raw) as Save & { format?: string; save?: Save }
+    if (d.format === FORMAT && d.save) d = d.save as Save & { format?: string }
+    if (d.version !== VERSION || !d.local || !d.ui || !d.github) return null
+    return d
+  } catch {
+    return null
+  }
+}
+
+/** Saves antigos (um só, de antes dos slots) viram o slot 1. */
+function migrateLegacy() {
+  const raw = store.get(LEGACY_KEY)
+  if (!raw) return
+  const d = parseSave(raw)
+  if (d && !store.get(slotKey(1))) {
+    try {
+      store.set(slotKey(1), raw)
+      writeMeta({ ...readMeta(), 1: metaOf(1, d) })
+      if (!store.get(ACTIVE_KEY)) store.set(ACTIVE_KEY, '1')
+    } catch {
+      return
+    }
+  }
+  store.del(LEGACY_KEY)
+}
+
 export const persist = {
   /** Data do último salvamento (para a interface). */
   lastSaved: 0 as number,
   error: '' as string,
-  /** Chamado uma vez antes de renderizar. Devolve true se havia progresso salvo. */
-  restore(): boolean {
+  /** Slot em jogo nesta página (null = ainda na tela inicial). */
+  active: null as number | null,
+  profile: null as Profile | null,
+  /** O motor já recebeu um jogo nesta página? Trocar de jogo depois disso exige recarregar. */
+  dirty: false,
+
+  slots(): SlotMeta[] {
+    migrateLegacy()
+    const m = readMeta()
+    return SLOT_IDS.map((id) => (store.get(slotKey(id)) ? m[id] : undefined)).filter((x): x is SlotMeta => !!x)
+  },
+  lastActive(): number | null {
+    migrateLegacy()
+    const id = Number(store.get(ACTIVE_KEY))
+    return SLOT_IDS.includes(id) && store.get(slotKey(id)) ? id : null
+  },
+
+  /** Carrega um slot no motor. Devolve true se deu certo. */
+  restore(id = persist.lastActive() ?? 1): boolean {
+    migrateLegacy()
+    const d = parseSave(store.get(slotKey(id)))
+    if (!d) return false
     try {
-      const raw = localStorage.getItem(KEY)
-      if (!raw) return false
-      const d = JSON.parse(raw) as Save
-      if (d.version !== VERSION) return false
       apply(d)
-      persist.lastSaved = d.savedAt
-      return true
     } catch (e) {
       console.warn('Progresso salvo ignorado:', e)
       return false
     }
+    persist.active = id
+    persist.profile = d.profile ?? readMeta()[id]?.profile ?? null
+    persist.dirty = true
+    persist.lastSaved = d.savedAt
+    playedBase = d.playedMs ?? 0
+    sessionStart = Date.now()
+    try {
+      store.set(ACTIVE_KEY, String(id))
+    } catch {
+      /* sem acesso */
+    }
+    return true
+  },
+  /** Começa um jogo novo no slot (o motor precisa estar limpo). */
+  newGame(id: number, profile: Profile) {
+    persist.active = id
+    persist.profile = profile
+    persist.dirty = true
+    playedBase = 0
+    sessionStart = Date.now()
+    const m = readMeta()
+    delete m[id]
+    writeMeta(m)
+    try {
+      store.set(ACTIVE_KEY, String(id))
+    } catch {
+      /* sem acesso */
+    }
+    persist.save()
   },
   save() {
-    if (disabled) return
+    if (disabled || persist.active === null) return
     try {
-      localStorage.setItem(KEY, JSON.stringify(snapshot()))
+      const d = snapshot()
+      store.set(slotKey(persist.active), JSON.stringify(d))
+      writeMeta({ ...readMeta(), [persist.active]: metaOf(persist.active, d) })
       persist.lastSaved = Date.now()
       persist.error = ''
     } catch (e) {
@@ -163,15 +328,64 @@ export const persist = {
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => persist.save(), 700)
   },
-  /** Apaga tudo e recarrega a página. */
-  reset() {
+  deleteSlot(id: number) {
+    store.del(slotKey(id))
+    const m = readMeta()
+    delete m[id]
+    writeMeta(m)
+    if (store.get(ACTIVE_KEY) === String(id)) store.del(ACTIVE_KEY)
+    if (persist.active === id) disabled = true // o jogo aberto não pode recriar o save apagado
+  },
+  /** Conteúdo do arquivo .json de exportação. */
+  exportSlot(id: number): string | null {
+    if (id === persist.active) persist.save()
+    const d = parseSave(store.get(slotKey(id)))
+    if (!d) return null
+    return JSON.stringify({ format: FORMAT, exportedAt: new Date().toISOString(), meta: readMeta()[id], save: d })
+  },
+  importSave(text: string, id: number): string | null {
+    const d = parseSave(text)
+    if (!d) return 'Arquivo inválido: não é um save do DevOps Lab (ou é de uma versão incompatível).'
+    try {
+      store.set(slotKey(id), JSON.stringify(d))
+      writeMeta({ ...readMeta(), [id]: { ...metaOf(id, d), created: Date.now() } })
+    } catch {
+      return 'Não há espaço no navegador para importar este save.'
+    }
+    return null
+  },
+  /** Agenda uma ação para depois de recarregar a página e recarrega. */
+  boot(b: Boot) {
+    persist.save()
     disabled = true
     try {
-      localStorage.removeItem(KEY)
+      sessionStorage.setItem(BOOT_KEY, JSON.stringify(b))
     } catch {
-      /* sem acesso ao armazenamento */
+      /* sem sessionStorage: volta para a tela inicial */
     }
     location.reload()
+  },
+  takeBoot(): Boot | null {
+    try {
+      const raw = sessionStorage.getItem(BOOT_KEY)
+      sessionStorage.removeItem(BOOT_KEY)
+      return raw ? (JSON.parse(raw) as Boot) : null
+    } catch {
+      return null
+    }
+  },
+  /** Volta para a tela inicial (salvando antes). */
+  toMenu() {
+    persist.save()
+    playedBase = playedNow()
+    paused = true
+    useOS.setState({ screen: 'start' })
+  },
+  /** Volta ao jogo que já está carregado nesta página. */
+  resume() {
+    if (paused) sessionStart = Date.now()
+    paused = false
+    useOS.setState({ screen: 'desktop' })
   },
   start() {
     useOS.subscribe((s, prev) => {
@@ -179,5 +393,7 @@ export const persist = {
     })
     window.addEventListener('beforeunload', () => persist.save())
     window.addEventListener('pagehide', () => persist.save())
+    // tempo de jogo: conta também em sessões longas sem mudanças
+    setInterval(() => persist.active !== null && useOS.getState().screen === 'desktop' && persist.save(), 60_000)
   },
 }

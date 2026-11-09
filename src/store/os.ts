@@ -54,6 +54,8 @@ export type Win = {
 }
 
 type OS = {
+  /** Tela inicial (menu do jogo) ou área de trabalho. */
+  screen: 'start' | 'desktop'
   windows: Partial<Record<AppId, Win>>
   focused: AppId | null
   zTop: number
@@ -109,6 +111,7 @@ export const hintCtx = (): HintCtx => {
 }
 
 export const useOS = create<OS>((set, get) => ({
+  screen: 'start',
   windows: {},
   focused: null,
   zTop: 10,

@@ -9,8 +9,14 @@ import { BrowserApp } from './apps/browser/Browser'
 import { currentShell, useOS } from './store/os'
 import { MailApp } from './apps/Mail'
 import { EditorApp } from './apps/Editor'
+import { StartScreen } from './components/StartScreen'
 
 export default function App() {
+  const screen = useOS((s) => s.screen)
+  return screen === 'start' ? <StartScreen /> : <Desktop />
+}
+
+function Desktop() {
   const windows = useOS((s) => s.windows)
 
   useEffect(() => {

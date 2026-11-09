@@ -29,7 +29,7 @@ O workflow `.github/workflows/ci.yml` roda lint, testes e build a cada push e pu
 
 ## Progresso salvo
 
-Todo o estado do simulador (arquivos, repositórios, GitHub, e-mails, AWS, containers, execuções do pipeline, editor, missão e janelas) é salvo automaticamente no `localStorage` do navegador (`src/store/persist.ts`) e restaurado ao abrir. Sessões SSH e pipelines em andamento não sobrevivem ao recarregar (os pipelines aparecem como cancelados). O menu ∞ tem "Salvar agora" e "Recomeçar do zero".
+O jogo abre numa tela inicial com Continuar, Novo jogo (nome, avatar, slot e missão inicial), Carregar e Missões. Há 3 slots de save: cada um guarda o estado inteiro do simulador (arquivos, repositórios, GitHub, e-mails, AWS, containers, execuções do pipeline, editor, missão, janelas e tempo jogado) no `localStorage` (`src/store/persist.ts`), com salvamento automático. Um save pode ser exportado e importado como arquivo `.json`. Trocar de save recarrega a página para começar com o motor limpo. Sessões SSH e pipelines em andamento não sobrevivem ao recarregar (aparecem como cancelados); deploys esperando aprovação continuam esperando. O menu ∞ tem "Salvar agora", "Menu principal" e "Recomeçar este save".
 
 ## Estrutura
 
@@ -40,7 +40,7 @@ src/
     shell.ts     # interpretador de comandos (pipes, >, >>, &&, ;, variáveis, Tab)
     missions.ts  # missões do tutorial: explicação, dica e verificação automática
   store/os.ts    # estado global (Zustand): janelas, missão atual, singletons do motor
-  store/persist.ts # progresso salvo no navegador (snapshot/restore de todos os módulos)
+  store/persist.ts # 3 slots de save no navegador, exportar/importar .json (snapshot/restore de todos os módulos)
   components/    # MenuBar, Dock, Window, Icons
     git.ts       # git simulado: branches, upstream, fetch/pull/merge, conflitos, push autenticado por token
     merge.ts     # merge de 3 vias (texto e árvores) com marcadores de conflito
@@ -55,7 +55,7 @@ src/
     openworld.ts # mundo aberto: repositórios, pessoas, convites e critérios de cada projeto
     bootstrap.ts # monta o estado das missões anteriores ao pular direto para uma missão
   apps/          # Terminal (xterm.js), Finder, Guia, Mail, Navegador com abas (GitHub, AWS, localhost, IP público)
-  components/    # MenuBar, Dock, Window, ícones e avatares anime (SVG originais)
+  components/    # tela inicial (continuar, novo jogo, carregar, missões), MenuBar, Dock, Window, ícones e avatares anime (SVG originais)
 ```
 
 ## Como adicionar um comando
