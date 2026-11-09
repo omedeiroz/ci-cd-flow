@@ -7,6 +7,7 @@ import { VERSION_LABEL } from './StartScreen'
 import { AnimeAvatar } from './AnimeAvatar'
 import { missions } from '../engine/missions'
 import { persist } from '../store/persist'
+import { editor } from '../engine/editor'
 
 const fmt = (d: Date) => {
   const day = d.toLocaleDateString('pt-BR', { weekday: 'short', day: 'numeric', month: 'short' }).replace(/\./g, '')
@@ -138,6 +139,7 @@ export function MenuBar() {
             'sep',
             { label: 'Salvar', key: 'Ctrl+S', run: run('save') },
             { label: 'Salvar tudo', run: run('saveAll') },
+            { label: 'Salvamento automático', checked: editor.autoSave, run: run('toggleAutoSave') },
             'sep',
             { label: 'Fechar arquivo', run: run('closeFile') },
             { label: 'Fechar pasta', run: run('closeFolder') },

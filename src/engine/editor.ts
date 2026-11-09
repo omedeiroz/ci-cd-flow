@@ -13,6 +13,10 @@ let reveal: { path: string; line: number; n: number } | null = null
 const listeners = new Set<() => void>()
 const emit = () => listeners.forEach((l) => l())
 let onShow: (() => void) | undefined
+/** Arquivo › Salvamento automático: salva 1 s depois da última alteração (como o "afterDelay" do VS Code). */
+let autoSave = false
+export const AUTO_SAVE_DELAY = 1000
+const autoTimers = new Map<string, ReturnType<typeof setTimeout>>()
 
 export const editor = {
   get root() {
@@ -89,9 +93,30 @@ export const editor = {
     emit()
     onShow?.()
   },
+  get autoSave() {
+    return autoSave
+  },
+  setAutoSave(on: boolean) {
+    autoSave = on
+    if (on) editor.saveAll() // ao ligar, salva o que estava pendente
+    else for (const t of autoTimers.values()) clearTimeout(t)
+    if (!on) autoTimers.clear()
+    emit()
+  },
   setContent(abs: string, content: string) {
     open = open.map((b) => (b.path === abs ? { ...b, content } : b))
     emit()
+    if (autoSave) {
+      clearTimeout(autoTimers.get(abs))
+      autoTimers.set(
+        abs,
+        setTimeout(() => {
+          autoTimers.delete(abs)
+          const b = open.find((x) => x.path === abs)
+          if (b && editor.dirty(b)) editor.save(abs)
+        }, AUTO_SAVE_DELAY),
+      )
+    }
   },
   save(abs: string) {
     const b = open.find((x) => x.path === abs)
@@ -132,7 +157,7 @@ registerCommand('code', {
 
 // ---------- progresso salvo ----------
 export function editorDump() {
-  return { root, open, active, recent }
+  return { root, open, active, recent, autoSave }
 }
 export function editorLoad(d: ReturnType<typeof editorDump>, vfs: VFS) {
   fs = d.root ? vfs : null
@@ -140,4 +165,5 @@ export function editorLoad(d: ReturnType<typeof editorDump>, vfs: VFS) {
   open = d.open
   active = d.active
   recent = d.recent
+  autoSave = !!d.autoSave
 }

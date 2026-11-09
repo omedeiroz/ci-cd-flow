@@ -1041,3 +1041,7 @@ select.gh-branch { font: inherit; font-weight: 600; font-size: 13px; color: #1f2
 .aws-field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0 14px; max-width: 460px; font-size: 13px; }
 .aws-field span { font-weight: 700; }
 .aws-field select { padding: 6px 8px; border-radius: 8px; border: 2px solid #7d8998; font: inherit; }
+.ed-check { display: inline-block; width: 16px; }
+.ed-status .autosave { cursor: pointer; opacity: .75; }
+.ed-status .autosave.on { opacity: 1; }
+.ed-status .autosave:hover { background: rgba(255,255,255,.12); }

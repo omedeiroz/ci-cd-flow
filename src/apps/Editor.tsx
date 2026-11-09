@@ -207,7 +207,7 @@ function FolderPicker({ onClose }: { onClose: () => void }) {
   )
 }
 
-type Cmd = { label: string; key?: string; run: () => void }
+type Cmd = { label: string; key?: string; run: () => void; checked?: boolean }
 
 function QuickPick({ mode, onClose, commands }: { mode: 'files' | 'commands'; onClose: () => void; commands: Cmd[] }) {
   const [q, setQ] = useState(mode === 'commands' ? '> ' : '')
@@ -444,6 +444,7 @@ export function EditorApp() {
     { label: 'Arquivo: Abrir pasta...', key: 'Ctrl+K Ctrl+O', run: () => setPicker(true) },
     { label: 'Arquivo: Salvar', key: 'Ctrl+S', run: () => buf && editor.save(buf.path) },
     { label: 'Arquivo: Salvar tudo', run: () => editor.saveAll() },
+    { label: `Arquivo: ${editor.autoSave ? 'Desligar' : 'Ligar'} salvamento automático`, run: () => editor.setAutoSave(!editor.autoSave) },
     { label: 'Arquivo: Fechar pasta', run: () => editor.closeFolder() },
     { label: 'Ver: Explorer', key: 'Ctrl+Shift+E', run: () => setView('explorer') },
     { label: 'Ver: Pesquisar', key: 'Ctrl+Shift+F', run: () => setView('search') },
@@ -465,6 +466,7 @@ export function EditorApp() {
     search: () => setView('search'),
     scm: () => setView('scm'),
     toggleTerminal: () => setTerm((t) => !t),
+    toggleAutoSave: () => editor.setAutoSave(!editor.autoSave),
   })
 
   const keys = (e: React.KeyboardEvent) => {
@@ -487,6 +489,7 @@ export function EditorApp() {
       { label: 'Abrir arquivo...', key: 'Ctrl+P', run: () => root && setQuick('files') },
       { label: 'Salvar', key: 'Ctrl+S', run: () => buf && editor.save(buf.path) },
       { label: 'Salvar tudo', run: () => editor.saveAll() },
+      { label: 'Salvamento automático', checked: editor.autoSave, run: () => editor.setAutoSave(!editor.autoSave) },
       { label: 'Fechar editor', run: () => buf && editor.close(buf.path) },
       { label: 'Fechar pasta', run: () => editor.closeFolder() },
     ],
@@ -533,7 +536,7 @@ export function EditorApp() {
               <div className="ed-dropdown">
                 {MENUS[m].map((c) => (
                   <div key={c.label} onClick={(e) => (e.stopPropagation(), setTopMenu(null), c.run())}>
-                    <span>{c.label}</span>
+                    <span>{c.checked !== undefined && <span className="ed-check">{c.checked ? '✓' : ''}</span>}{c.label}</span>
                     <span className="dim">{c.key}</span>
                   </div>
                 ))}
@@ -718,7 +721,14 @@ export function EditorApp() {
         )}
         <span className={yamlErr ? 'err' : ''}>{yamlErr ? `⊗ 1  ${yamlErr}` : '⊗ 0  ⚠ 0'}</span>
         <span className="right">
-          {buf && editor.dirty(buf) && <span className="unsaved">● Não salvo (Ctrl+S)</span>}
+          {buf && editor.dirty(buf) && <span className="unsaved">{editor.autoSave ? '● Salvando…' : '● Não salvo (Ctrl+S)'}</span>}
+          <span
+            className={`autosave ${editor.autoSave ? 'on' : ''}`}
+            title={editor.autoSave ? 'Salvamento automático ligado: salva 1 s depois de você parar de digitar. Clique para desligar.' : 'Salvamento automático desligado. Clique para ligar.'}
+            onClick={() => editor.setAutoSave(!editor.autoSave)}
+          >
+            {editor.autoSave ? '⟲ Auto Save' : '⟲ Auto Save: off'}
+          </span>
           {buf && <span>Ln {pos.ln}, Col {pos.col}</span>}
           {buf && <span>Espaços: 2</span>}
           {buf && <span>UTF-8</span>}
