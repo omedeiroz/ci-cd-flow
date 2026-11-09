@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useAppCommands } from '../../store/appCommands'
 import { useOS } from '../../store/os'
-import { net, loadTodos, callExport, type Service } from '../../engine/node'
+import { net, apiRoute, callExport, type Service } from '../../engine/node'
 import { actions } from '../../engine/actions'
 import { aws } from '../../engine/aws'
 import { GitHubPage } from './GitHubPages'
@@ -91,17 +91,16 @@ function Timeout({ host, tip }: { host: string; tip?: string }) {
 }
 
 function TodoApp({ svc, label }: { svc: Service; label: string }) {
-  const [extra, setExtra] = useState<string[]>([])
+  useOS((s) => s.version)
   const [text, setText] = useState('')
-  const [checked, setChecked] = useState<Record<number, boolean>>({})
-  let todos: { id: number; title: string; done: boolean }[] = []
+  const [addErr, setAddErr] = useState('')
+  let all: { id: number; title: string; done: boolean }[] = []
   let error = ''
   try {
-    todos = loadTodos(svc.fs, svc.root)
+    all = net.todos(svc)
   } catch (e) {
     error = (e as Error).message
   }
-  const all = [...todos, ...extra.map((t, i) => ({ id: 1000 + i, title: t, done: false }))]
   return (
     <div className="todo-app">
       <div className="todo-card">
@@ -114,25 +113,25 @@ function TodoApp({ svc, label }: { svc: Service; label: string }) {
             <form
               onSubmit={(e) => {
                 e.preventDefault()
-                if (text.trim()) setExtra((x) => [...x, text.trim()])
+                // POST /todos: quem valida é o addTodo do código do projeto
+                setAddErr(net.todoAdd(svc, text.trim()) ?? '')
                 setText('')
               }}
             >
               <input value={text} onChange={(e) => setText(e.target.value)} placeholder="Nova tarefa…" />
               <button>Adicionar</button>
             </form>
+            {addErr && <p className="todo-add-err">400 Bad Request · {addErr}</p>}
             <ul>
-              {all.map((t) => {
-                const done = checked[t.id] ?? t.done
-                return (
-                  <li key={t.id} className={done ? 'done' : ''} onClick={() => setChecked((c) => ({ ...c, [t.id]: !done }))}>
-                    <span className="box">{done ? '✓' : ''}</span>
-                    {t.title}
-                  </li>
-                )
-              })}
+              {all.map((t) => (
+                <li key={t.id} className={t.done ? 'done' : ''} onClick={() => net.todoToggle(svc, t.id)}>
+                  <span className="box">{t.done ? '✓' : ''}</span>
+                  {t.title}
+                </li>
+              ))}
             </ul>
             <p className="todo-foot">GET /todos · {all.length} tarefas</p>
+            <p className="todo-foot small">As tarefas ficam na memória do servidor: recarregar a página mantém, mas reiniciar o app ou fazer um deploy apaga (não há banco de dados).</p>
           </>
         )}
       </div>
@@ -217,7 +216,7 @@ function HttpPage({ host, path }: { host: string; path: string }) {
       />
     )
   if (path === '/health') return <pre className="raw">{'{"status":"ok"}'}</pre>
-  if (path === '/todos') return <pre className="raw">{JSON.stringify(loadTodos(svc.fs, svc.root))}</pre>
+  if (path === '/todos') return <pre className="raw">{apiRoute(svc, '/todos')}</pre>
   if (path === '/products') return <pre className="raw">{JSON.stringify(callExport(svc.fs, svc.root, 'src/catalog.js', 'listProducts'))}</pre>
   const where = local ? `localhost:${port} (sua máquina)` : `${hostname}:${port} (EC2)`
   const label = svc.via ? `container Docker "${svc.via.replace('docker:', '')}" em ${where}` : where

@@ -403,13 +403,14 @@ function Invitation({ repo }: { repo: RemoteRepo }) {
   )
 }
 
+/** Token recém-criado: aparece na lista até o aluno sair da página de tokens ou dispensar o aviso. */
 let freshToken: Token | null = null
 
 function Tokens() {
   const me = github.current()!
   const [copied, setCopied] = useState(false)
-  const shown = freshToken
-  useEffect(() => () => void (freshToken = null), [])
+  const [, hide] = useState(0)
+  const shown = freshToken && me.tokens.some((t) => t.id === freshToken!.id) ? freshToken : null
   return (
     <Frame>
       <div className="gh-settings">
@@ -451,6 +452,10 @@ function Tokens() {
                 >
                   {copied ? '✓ Copiado' : '📋 Copiar'}
                 </button>
+              </div>
+              <div className="gh-token-tip">
+                <span className="gh-muted">Dica: cole o token num lugar seguro antes de continuar. Ele também serve como senha no <code>git push</code>.</span>
+                <button className="gh-btn small" onClick={() => ((freshToken = null), hide((n) => n + 1))}>Já copiei</button>
               </div>
             </div>
           )}
@@ -816,6 +821,8 @@ export function GitHubPage({ path, query }: { path: string; query: URLSearchPara
   useOS((s) => s.version)
   const parts = path.split('/').filter(Boolean)
   const me = github.current()
+  // o token novo só some quando o aluno sai das páginas de tokens
+  if (parts[0] !== 'settings') freshToken = null
   if (!parts.length) return me ? <Dashboard /> : <Landing />
   if (parts[0] === 'signup') return parts[1] === 'verify' ? <VerifyPending /> : <Signup />
   if (parts[0] === 'login') return <Login />

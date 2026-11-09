@@ -6,7 +6,21 @@ import { C, fail, ok, registerCommand } from './shell'
 // ---------- serviços de rede (portas abertas) ----------
 
 /** `via`: quem atende a porta (ex.: 'docker:todo' quando é um container). */
-export type Service = { fs: VFS; root: string; name: string; startedAt: number; machineId: string; port: number; sessionId: number; persistent: boolean; via?: string }
+export type Service = {
+  fs: VFS
+  root: string
+  name: string
+  startedAt: number
+  machineId: string
+  port: number
+  sessionId: number
+  persistent: boolean
+  via?: string
+  /** O que os usuários fizeram no app enquanto o processo roda (fica na memória do servidor; reiniciar apaga). */
+  memory?: TodoOp[]
+}
+export type TodoOp = { op: 'add'; title: string } | { op: 'toggle'; id: number }
+type Todo = { id: number; title: string; done: boolean }
 /** Como alcançar uma máquina pelo IP público (fornecido pela "AWS"). */
 export type PublicHost = { machineId: string; portOpen: (port: number) => boolean }
 const services: Record<string, Service> = {}
@@ -16,6 +30,26 @@ export const net = {
   get: (machineId: string, port: number) => services[`${machineId}:${port}`] as Service | undefined,
   start(s: Service) {
     services[`${s.machineId}:${s.port}`] = s
+    changed()
+  },
+  /** Tarefas do app de tarefas como o processo em execução as vê (código atual + o que foi feito desde o start). */
+  todos(svc: Service): Todo[] {
+    return liveModule(svc, makeRequire(svc.fs, svc.root, []), 'src/todos.js').listTodos() as Todo[]
+  },
+  /** POST /todos: chama o addTodo do próprio código do projeto. Devolve a mensagem de erro, se houver. */
+  todoAdd(svc: Service, title: string): string | null {
+    try {
+      const mod = liveModule(svc, makeRequire(svc.fs, svc.root, []), 'src/todos.js')
+      ;(mod.addTodo as (t: string) => unknown)(title)
+    } catch (e) {
+      return (e as Error).message
+    }
+    ;(svc.memory ??= []).push({ op: 'add', title })
+    changed()
+    return null
+  },
+  todoToggle(svc: Service, id: number) {
+    ;(svc.memory ??= []).push({ op: 'toggle', id })
     changed()
   },
   stop(machineId: string, port: number) {
@@ -246,9 +280,9 @@ export function runTests(fs: VFS, root: string, node?: string) {
 /** Rotas JSON conhecidas dos apps do simulador (lidas do código real do projeto). */
 export function apiRoute(svc: Service, path: string): string | undefined {
   try {
-    const fromServer = serverRoute(svc.fs, svc.root, path)
+    const fromServer = serverRoute(svc, path)
     if (fromServer !== undefined) return fromServer
-    if (path === '/todos' && svc.fs.exists(`${svc.root}/src/todos.js`)) return JSON.stringify(loadTodos(svc.fs, svc.root))
+    if (path === '/todos' && svc.fs.exists(`${svc.root}/src/todos.js`)) return JSON.stringify(net.todos(svc))
     if (path === '/products' && svc.fs.exists(`${svc.root}/src/catalog.js`)) return JSON.stringify(callExport(svc.fs, svc.root, 'src/catalog.js', 'listProducts'))
   } catch (e) {
     return `{"error":"${(e as Error).message}"}`
@@ -256,8 +290,30 @@ export function apiRoute(svc: Service, path: string): string | undefined {
   return undefined
 }
 
+/** Carrega um módulo do projeto e, se for o de tarefas, refaz o que aconteceu desde que o servidor subiu. */
+function liveModule(svc: Service, req: (id: string) => unknown, rel: string): Record<string, (...a: unknown[]) => unknown> {
+  const mod = req(`${svc.root}/${rel}`) as Record<string, (...a: unknown[]) => unknown>
+  if (rel === 'src/todos.js' && svc.memory?.length && !replayed.has(mod)) {
+    replayed.add(mod)
+    for (const op of svc.memory) {
+      try {
+        if (op.op === 'add') mod.addTodo?.(op.title)
+        else {
+          const t = (mod.listTodos?.() as Todo[] | undefined)?.find((x) => x.id === op.id)
+          if (t) t.done = !t.done
+        }
+      } catch {
+        /* o código mudou e a operação não vale mais */
+      }
+    }
+  }
+  return mod
+}
+const replayed = new WeakSet<object>()
+
 /** Lê as rotas `app.get('/x', (req, res) => res.json(EXPR))` do src/server.js e avalia EXPR com os módulos importados. */
-function serverRoute(fs: VFS, root: string, path: string): string | undefined {
+function serverRoute(svc: Service, path: string): string | undefined {
+  const { fs, root } = svc
   let src: string
   try {
     src = fs.read(`${root}/src/server.js`)
@@ -269,17 +325,17 @@ function serverRoute(fs: VFS, root: string, path: string): string | undefined {
     if (m[1] !== path) continue
     const names: string[] = []
     const values: unknown[] = []
+    const shared = makeRequire(fs, root, [])
     for (const r of src.matchAll(/const\s*\{([^}]+)\}\s*=\s*require\(\s*['"](\.{1,2}\/[^'"]+)['"]\s*\)/g)) {
       const rel = r[2].replace(/^\.\//, 'src/').replace(/^\.\.\//, '')
-      const mod = loadModule(fs, root, /\.js(on)?$/.test(rel) ? rel : `${rel}.js`)
+      const mod = liveModule(svc, shared, /\.js(on)?$/.test(rel) ? rel : `${rel}.js`)
       for (const n of r[1].split(',').map((x) => x.trim()).filter(Boolean)) {
         names.push(n)
         values.push(mod[n])
       }
     }
-    const req = makeRequire(fs, root, [])
     names.push('require')
-    values.push((id: string) => req(fs.resolve(`${root}/src`, id)))
+    values.push((id: string) => shared(fs.resolve(`${root}/src`, id)))
     const value = new Function(...names, `return (${m[2]})`)(...values)
     return JSON.stringify(value)
   }
