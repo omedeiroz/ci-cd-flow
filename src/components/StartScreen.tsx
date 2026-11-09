@@ -62,7 +62,7 @@ export function StartScreen() {
   const refresh = () => force((n) => n + 1)
 
   return (
-    <div className="start">
+    <div className="title-screen">
       <div className="wallpaper" />
       <div className="start-shade" />
       <div className="start-panel">
