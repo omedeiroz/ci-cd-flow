@@ -1037,3 +1037,7 @@ select.gh-branch { font: inherit; font-weight: 600; font-size: 13px; color: #1f2
 .todo-add-err { margin: 6px 0 0; font-size: 12px; color: #c9302c; }
 .todo-foot.small { font-size: 11px; opacity: .7; margin-top: 4px; }
 .gh-token-tip { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 8px; }
+.step-warn { margin: 8px 0; padding: 9px 11px; border-radius: 8px; background: #fff4e5; border: 1px solid #f5c26b; color: #7a4b00; font-size: 12.5px; line-height: 1.45; }
+.aws-field { display: flex; flex-direction: column; gap: 4px; margin: 10px 0 14px; max-width: 460px; font-size: 13px; }
+.aws-field span { font-weight: 700; }
+.aws-field select { padding: 6px 8px; border-radius: 8px; border: 2px solid #7d8998; font: inherit; }

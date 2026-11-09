@@ -3,7 +3,7 @@ import { useAppCommands } from '../../store/appCommands'
 import { useOS } from '../../store/os'
 import { net, apiRoute, callExport, type Service } from '../../engine/node'
 import { actions } from '../../engine/actions'
-import { aws } from '../../engine/aws'
+import { aws, type Instance } from '../../engine/aws'
 import { GitHubPage } from './GitHubPages'
 import { AwsConsole } from './AwsConsole'
 
@@ -192,6 +192,16 @@ function CatalogApp({ svc, label }: { svc: Service; label: string }) {
   )
 }
 
+/** Explica por que a porta está fechada, inclusive quando a regra foi criada no grupo errado. */
+function closedPortTip(inst: Instance, port: number) {
+  const mine = aws.group(inst.sgId)
+  const elsewhere = aws.groups().filter((g) => g.id !== inst.sgId && g.rules.some((r) => r.port === port))
+  const label = (g?: { id: string; name: string }) => (g ? `"${g.name}" (${g.id})` : inst.sgId)
+  if (elsewhere.length)
+    return `Dica: existe uma regra para a porta ${port} no grupo ${elsewhere.map(label).join(', ')}, mas esta instância usa o grupo ${label(mine)}. Regras só valem no grupo ligado à instância: edite as regras de ${mine?.name ?? 'dela'} (Instâncias › Segurança) ou troque o grupo da instância (Ações › Segurança › Alterar grupo de segurança).`
+  return `Dica: o servidor pode estar rodando, mas o grupo de segurança da instância, ${label(mine)}, não libera a porta ${port} para a internet.`
+}
+
 function HttpPage({ host, path }: { host: string; path: string }) {
   useOS((s) => s.version)
   const [hostname, portStr] = host.split(':')
@@ -202,7 +212,7 @@ function HttpPage({ host, path }: { host: string; path: string }) {
     const inst = aws.findByHost(hostname)
     if (!inst || inst.state !== 'running') return <Timeout host={hostname} />
     if (!aws.allows(inst, port, aws.myIp))
-      return <Timeout key={`${host}-closed`} host={hostname} tip={`Dica: o servidor pode estar rodando, mas o Security Group da instância não libera a porta ${port} para a internet.`} />
+      return <Timeout key={`${host}-closed`} host={hostname} tip={closedPortTip(inst, port)} />
     machineId = inst.id
   }
   const svc = net.get(machineId, port)

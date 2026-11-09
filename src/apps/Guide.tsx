@@ -106,6 +106,7 @@ function MissionGuide() {
                   {s.body.map((b, j) => (
                     <p key={j}><Rich text={b} /></p>
                   ))}
+                  {s.diagnose?.() && <div className="step-warn">⚠ <Rich text={s.diagnose()!} /></div>}
                   {s.browse && (
                     <div className="hint web">
                       <span className="hint-label">Digite na barra de endereço:</span>

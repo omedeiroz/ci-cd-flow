@@ -182,6 +182,7 @@ function Instances() {
   const [sel, setSel] = useState<string | null>(list[0]?.id ?? null)
   const [tab, setTab] = useState<'details' | 'security'>('details')
   const [menu, setMenu] = useState(false)
+  const [actions, setActions] = useState(false)
   const inst = list.find((i) => i.id === sel)
   const sg = inst ? aws.group(inst.sgId) : undefined
   return (
@@ -199,6 +200,14 @@ function Instances() {
                   <div onClick={() => (aws.setState(inst.id, 'stop'), setMenu(false))}>Interromper instância</div>
                   <div onClick={() => (aws.setState(inst.id, 'start'), setMenu(false))}>Iniciar instância</div>
                   <div className="danger" onClick={() => (aws.setState(inst.id, 'terminate'), setMenu(false))}>Encerrar (excluir) instância</div>
+                </div>
+              )}
+            </div>
+            <div className="aws-dd">
+              <button className="aws-btn" disabled={!inst} onClick={() => setActions((m) => !m)}>Ações ▾</button>
+              {actions && inst && (
+                <div className="aws-menu" onMouseLeave={() => setActions(false)}>
+                  <div onClick={() => (go(`/ec2/instances/${inst.id}/security`), setActions(false))}>Segurança › Alterar grupo de segurança</div>
                 </div>
               )}
             </div>
@@ -268,7 +277,10 @@ function Instances() {
             <div>
               <p>
                 Security groups: <span className="aws-link" onClick={() => go(`/ec2/sg/${inst.sgId}`)}>{inst.sgId} ({sg?.name})</span>
+                {' · '}
+                <span className="aws-link" onClick={() => go(`/ec2/instances/${inst.id}/security`)}>Alterar grupo</span>
               </p>
+              <p className="aws-muted small">Regras de entrada que valem para esta instância:</p>
               <RulesTable rules={sg?.rules ?? []} />
             </div>
           )}
@@ -607,7 +619,15 @@ function Group({ id }: { id: string }) {
           <h2>{g.id} – {g.name}</h2>
           <button className="aws-btn primary" onClick={() => go(`/ec2/sg/${id}/edit`)}>Editar regras de entrada</button>
         </div>
-        <p className="aws-muted">{g.description}{used.length ? ` · Usado por: ${used.map((i) => i.name || i.id).join(', ')}` : ''}</p>
+        <p className="aws-muted">{g.description}</p>
+        {used.length ? (
+          <div className="aws-alert info">Usado por: {used.map((i) => i.name || i.id).join(', ')}. Mudanças nas regras valem na hora para essas instâncias.</div>
+        ) : (
+          <div className="aws-alert warn">
+            Nenhuma instância usa este grupo, então as regras dele não afetam nenhum servidor.
+            {aws.instances().some((i) => i.state !== 'terminated') && ' Para liberar uma porta, edite o grupo que aparece na aba Segurança da instância ou troque o grupo da instância (Instâncias › Ações › Segurança).'}
+          </div>
+        )}
         <h3>Regras de entrada ({g.rules.length})</h3>
         <RulesTable rules={g.rules} />
         <p className="aws-muted small">Regras de saída: todo o tráfego liberado (0.0.0.0/0).</p>
@@ -638,6 +658,9 @@ function EditRules({ id }: { id: string }) {
       <div className="aws-card">
         <h2>Editar regras de entrada</h2>
         <p className="aws-muted">As regras de entrada controlam o tráfego de entrada que pode chegar à instância. · {g.id} – {g.name}</p>
+        {!aws.instances().some((i) => i.sgId === id && i.state !== 'terminated') && (
+          <div className="aws-alert warn">Atenção: nenhuma instância usa este grupo. As regras salvas aqui não vão liberar nada até o grupo ser ligado a uma instância.</div>
+        )}
         <table className="aws-table edit">
           <thead><tr><th>Tipo</th><th>Protocolo</th><th>Intervalo de portas</th><th>Origem</th><th>Descrição - opcional</th><th /></tr></thead>
           <tbody>
@@ -682,6 +705,42 @@ function EditRules({ id }: { id: string }) {
   )
 }
 
+function ChangeGroup({ id }: { id: string }) {
+  const inst = aws.instances().find((i) => i.id === id)
+  const [sg, setSg] = useState(inst?.sgId ?? '')
+  if (!inst) return <Instances />
+  const g = aws.group(sg)
+  return (
+    <Frame nav="instances">
+      <div className="aws-card">
+        <h2>Alterar grupo de segurança</h2>
+        <p className="aws-muted">Instância {inst.id} {inst.name && `(${inst.name})`}. O grupo de segurança é o firewall: só as regras dele valem para esta instância.</p>
+        <label className="aws-field">
+          <span>Grupo de segurança</span>
+          <select value={sg} onChange={(e) => setSg(e.target.value)} aria-label="Grupo de segurança">
+            {aws.groups().map((x) => (
+              <option key={x.id} value={x.id}>
+                {x.name} ({x.id}){x.id === inst.sgId ? ' · atual' : ''}
+              </option>
+            ))}
+          </select>
+        </label>
+        {g && (
+          <>
+            <h3>Regras de entrada de {g.name}</h3>
+            <RulesTable rules={g.rules} />
+            {!g.rules.some((r) => r.port === 22) && <div className="aws-alert warn">Este grupo não libera a porta 22: você não vai conseguir entrar por SSH.</div>}
+          </>
+        )}
+        <div className="aws-summary-foot">
+          <button className="aws-btn" onClick={() => go('/ec2/instances')}>Cancelar</button>
+          <button className="aws-btn primary" disabled={sg === inst.sgId} onClick={() => (aws.setInstanceGroup(inst.id, sg), go('/ec2/instances'))}>Salvar</button>
+        </div>
+      </div>
+    </Frame>
+  )
+}
+
 export function AwsConsole({ path }: { path: string }) {
   useOS((s) => s.version)
   if (!aws.loggedIn) return <SignIn />
@@ -692,5 +751,6 @@ export function AwsConsole({ path }: { path: string }) {
   if (p[1] === 'sg' && p[2]) return p[3] === 'edit' ? <EditRules id={p[2]} /> : <Group id={p[2]} />
   if (p[1] === 'sg') return <Groups />
   if (p[1] === 'instances' && p[2] && p[3] === 'connect') return <Connect id={p[2]} />
+  if (p[1] === 'instances' && p[2] && p[3] === 'security') return <ChangeGroup id={p[2]} />
   return <Instances />
 }

@@ -36,6 +36,8 @@ export type Step = {
   /** Trecho de código para o aluno colar no editor (botões Copiar / Inserir no editor). */
   snippet?: { file: string; code: string; mode: 'replace' | 'append' }
   check: (ctx: CheckCtx) => boolean
+  /** Aviso mostrado no Guia quando o aluno fez algo de um jeito que não vai funcionar (ex.: regra no grupo errado). */
+  diagnose?: () => string | null
   success: string
 }
 
@@ -48,6 +50,15 @@ export type Mission = {
 }
 
 const HOME = '/home/dev'
+/** Regra da porta 3000 criada num grupo que não está ligado à instância. */
+function wrongGroup(): string | null {
+  const inst = aws.instances().find((i) => i.state === 'running' && !aws.allows(i, 3000, '8.8.8.8'))
+  if (!inst) return null
+  const other = aws.groups().find((g) => g.id !== inst.sgId && g.rules.some((r) => r.port === 3000))
+  if (!other) return null
+  return `A regra da porta 3000 está no grupo "${other.name}", mas a instância usa o grupo "${aws.group(inst.sgId)?.name ?? inst.sgId}". Crie a regra nesse grupo (Instâncias › aba Segurança › clique no grupo) ou troque o grupo da instância em Ações › Segurança.`
+}
+
 const staging = () => aws.instances().find((i) => i.name === STAGING_NAME && i.state !== 'terminated')
 const production = () => aws.instances().find((i) => i.name !== STAGING_NAME && i.state === 'running')
 const waitingProd = () => actions.runs(TEAM_REPO).some((r) => r.jobs.some((j) => j.environment === 'staging' && j.conclusion === 'success') && r.jobs.some((j) => j.environment === 'production' && (j.status === 'waiting' || !!j.review)))
@@ -601,6 +612,7 @@ export const missions: Mission[] = [
         body: ['Abra uma nova aba no Navegador e acesse o endereço abaixo.', 'Spoiler: vai ficar carregando até dar erro. Por quê?'],
         browse: ({ ip }) => `http://${ip || '<IP-público>'}:3000`,
         check: ({ event }) => event.kind === 'browse' && aws.instances().some((i) => event.url.includes(`${i.publicIp}:3000`)),
+        diagnose: wrongGroup,
         success: 'Timeout! A aplicação está rodando, mas o firewall da AWS bloqueia a porta 3000.',
       },
       {
@@ -608,9 +620,12 @@ export const missions: Mission[] = [
         title: 'Libere a porta 3000 no Security Group',
         body: [
           'O Security Group é o firewall da instância. Hoje ele só libera a porta 22 (SSH).',
-          'No console: EC2 > Security Groups > grupo da instância > Editar regras de entrada > Adicionar regra: TCP personalizado, porta 3000, origem 0.0.0.0/0 (qualquer lugar). Salve.',
+          'Atenção ao grupo certo: a conta tem outros grupos (como o "default"), e regras só valem no grupo ligado à instância. No console, abra Instâncias, selecione o servidor e clique no grupo que aparece na aba Segurança.',
+          'Lá: Editar regras de entrada > Adicionar regra: TCP personalizado, porta 3000, origem 0.0.0.0/0 (qualquer lugar). Salve.',
+          'Se você já criou a regra em outro grupo, também dá para trocar o grupo da instância (Ações › Segurança), desde que o novo grupo também libere a porta 22.',
         ],
         check: () => aws.instances().some((i) => i.state === 'running' && aws.allows(i, 3000, '8.8.8.8')),
+        diagnose: wrongGroup,
         success: 'Porta liberada.',
       },
       {
@@ -619,6 +634,7 @@ export const missions: Mission[] = [
         body: ['Volte na aba do IP público e recarregue (↻).'],
         check: ({ event }) =>
           event.kind === 'browse' && aws.instances().some((i) => event.url.includes(`${i.publicIp}:3000`) && aws.allows(i, 3000, '8.8.8.8') && !!net.get(i.id, 3000)),
+        diagnose: wrongGroup,
         success: 'A todo-api está na internet! Qualquer pessoa com o IP consegue acessar.',
       },
       {

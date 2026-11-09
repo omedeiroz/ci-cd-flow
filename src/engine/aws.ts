@@ -158,6 +158,13 @@ export const aws = {
     emit()
     return g
   },
+  /** Ações › Segurança › Alterar grupos de segurança. */
+  setInstanceGroup(instanceId: string, sgId: string) {
+    const i = instances.find((x) => x.id === instanceId)
+    if (!i || !groups.some((g) => g.id === sgId)) return
+    i.sgId = sgId
+    emit()
+  },
   setRules(sgId: string, rules: Omit<Rule, 'id'>[]) {
     const g = groups.find((x) => x.id === sgId)
     if (!g) return
