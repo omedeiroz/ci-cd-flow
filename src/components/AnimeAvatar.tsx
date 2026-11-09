@@ -10,10 +10,26 @@ const pick = <T,>(arr: T[], seed: number, salt: number) => arr[Math.abs(Math.imu
 
 export const AVATAR_COUNT = 48
 
-/** Avatares escolhíveis pelo jogador: sementes a partir de 1000 combinam cabelo e penteado sem repetir. */
-export const PLAYER_AVATARS = Array.from({ length: 48 }, (_, i) => 1000 + ((i * 7) % 48))
+/**
+ * Sementes escolhíveis pelo jogador, sem repetir combinação de cabelo e penteado:
+ * 1000–1047 = traços femininos, 2000–2047 = traços masculinos.
+ */
+export const FEMININE_AVATARS = Array.from({ length: 48 }, (_, i) => 1000 + ((i * 7) % 48))
+export const MASCULINE_AVATARS = Array.from({ length: 48 }, (_, i) => 2000 + ((i * 7) % 48))
+export const PLAYER_AVATARS = FEMININE_AVATARS.flatMap((f, i) => [MASCULINE_AVATARS[i], f])
 
-export function AnimeAvatar({ seed, size = 32 }: { seed: number; size?: number }) {
+/** Personagens masculinos do enredo (as sementes antigas continuam valendo nos saves). */
+const LEGACY: Record<number, number> = {
+  1: 2006, // Senku Ishigami
+  25: 2039, // Shikamaru Nara
+  23: 2016, // Killua Zoldyck
+  30: 2022, // Rintarou Okabe
+  12: 2027, // Levi Ackerman
+}
+
+export function AnimeAvatar({ seed: raw, size = 32 }: { seed: number; size?: number }) {
+  const seed = LEGACY[raw] ?? raw
+  if (seed >= 2000) return <MasculineAvatar seed={seed} size={size} />
   // sementes >= 1000: combinação explícita (cada uma diferente); abaixo disso, "aleatória" por hash
   const v = seed - 1000
   const explicit = v >= 0
@@ -73,6 +89,64 @@ export function AnimeAvatar({ seed, size = 32 }: { seed: number; size?: number }
         <path d="M24 16 Q30 13 36 15" stroke="#fff" strokeOpacity=".35" strokeWidth="1.6" fill="none" strokeLinecap="round" />
         {extra === 1 && <path d="M32 11 Q30 2 37 3 Q32 5 33 11" fill={hair} />}
         {extra === 2 && <rect x="40" y="19" width="6" height="2.6" rx="1.3" fill="#fbbf24" transform="rotate(-25 43 20)" />}
+      </g>
+    </svg>
+  )
+}
+
+/** Variação com traços masculinos: cabelo curto, sobrancelhas marcadas, queixo mais anguloso, sem blush. */
+function MasculineAvatar({ seed, size }: { seed: number; size: number }) {
+  const v = (seed - 2000) % 48
+  const hair = HAIR[v % HAIR.length]
+  const eye = EYES[(v * 5 + Math.floor(v / 12)) % EYES.length]
+  const bg = BG[(v * 3 + 5) % BG.length]
+  const shirt = SHIRT[(v * 11 + 5) % SHIRT.length]
+  const skin = SKIN[(v + Math.floor(v / 4) + 1) % SKIN.length]
+  const style = Math.floor(v / 12) % 4 // 0 espetado, 1 bagunçado, 2 franja de lado, 3 curto arrumado
+  const ahoge = v % 5 === 0
+  const id = `avm${seed}`
+  const fringe = [
+    'M17 30 Q15 16 22 12 L18 5 L27 10 L30 2 L35 9 L43 4 L42 12 Q49 16 47 30 L44 24 L41 28 L37 21 L33 27 L29 21 L25 27 L22 23 Z',
+    'M17 30 Q15 13 32 11 Q49 13 47 30 L45 22 L42 27 L39 19 L35.5 25 L32 18 L28.5 25 L25 19 L22 26 L19 21 Z',
+    'M17 30 Q15 12 33 11 Q49 12 47 30 L46 22 Q40 19 33 23 Q27 26 21 22 Q19 26 17 30 Z',
+    'M18 27 Q17 12 32 11 Q47 12 46 27 Q41 18 32 18 Q23 18 18 27 Z',
+  ][style]
+  return (
+    <svg viewBox="0 0 64 64" width={size} height={size} className="anime-avatar" aria-hidden>
+      <defs>
+        <clipPath id={`${id}-c`}>
+          <circle cx="32" cy="32" r="32" />
+        </clipPath>
+      </defs>
+      <g clipPath={`url(#${id}-c)`}>
+        <rect width="64" height="64" fill={bg} />
+        {/* cabelo de trás, curto */}
+        <path d="M16 31 Q14 10 32 10 Q50 10 48 31 L46 34 L18 34 Z" fill={hair} />
+        {/* corpo */}
+        <path d="M10 64 Q12 52 32 52 Q52 52 54 64 Z" fill={shirt} />
+        <path d="M26 46 h12 v8 q-6 3 -12 0 z" fill={skin} filter="brightness(.92)" />
+        <path d="M26 53 L32 58 L38 53" stroke="#fff" strokeOpacity=".35" strokeWidth="1.4" fill="none" />
+        {/* rosto (queixo mais anguloso) */}
+        <path d="M18 31 Q18.5 44 32 50 Q45.5 44 46 31 Q46 19 32 19 Q18 19 18 31 Z" fill={skin} />
+        <ellipse cx="17.6" cy="35" rx="2" ry="3" fill={skin} />
+        <ellipse cx="46.4" cy="35" rx="2" ry="3" fill={skin} />
+        {/* olhos e sobrancelhas */}
+        {[25.5, 38.5].map((cx) => (
+          <g key={cx}>
+            <ellipse cx={cx} cy="37" rx="3.7" ry="3.8" fill="#fff" />
+            <ellipse cx={cx} cy="37.4" rx="2.9" ry="3.3" fill={eye} />
+            <ellipse cx={cx} cy="38" rx="1.5" ry="2" fill="#1b1b24" opacity=".75" />
+            <circle cx={cx - 1} cy="35.9" r="1" fill="#fff" />
+            <path d={`M${cx - 4.2} 34.6 Q${cx} 32.9 ${cx + 4.2} 34.2`} stroke="#1b1b24" strokeWidth="1.5" fill="none" strokeLinecap="round" />
+            <path d={cx < 32 ? `M${cx - 4.6} 30.6 L${cx + 3.8} 29.4` : `M${cx - 3.8} 29.4 L${cx + 4.6} 30.6`} stroke="#2a2230" strokeWidth="2" strokeLinecap="round" />
+          </g>
+        ))}
+        <path d="M32 40 L31.2 42.4 L32.4 42.6" stroke="#000" strokeOpacity=".18" strokeWidth=".9" fill="none" strokeLinecap="round" />
+        <path d={v % 3 === 0 ? 'M29.5 45 Q32 46.8 34.5 45' : 'M30 45.2 L34 45.2'} stroke="#7a3b3b" strokeWidth="1.1" fill="none" strokeLinecap="round" />
+        {/* franja */}
+        <path d={fringe} fill={hair} />
+        <path d="M24 15 Q30 12.6 36 14" stroke="#fff" strokeOpacity=".3" strokeWidth="1.4" fill="none" strokeLinecap="round" />
+        {ahoge && <path d="M31 11 Q28 2 36 3 Q31 5 33 11" fill={hair} />}
       </g>
     </svg>
   )

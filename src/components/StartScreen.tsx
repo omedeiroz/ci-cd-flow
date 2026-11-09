@@ -3,7 +3,7 @@ import { useRef, useState } from 'react'
 import { useOS } from '../store/os'
 import { persist, progressOf, SLOT_IDS, type Profile, type SlotMeta } from '../store/persist'
 import { missions } from '../engine/missions'
-import { AnimeAvatar, PLAYER_AVATARS as AVATARS } from './AnimeAvatar'
+import { AnimeAvatar, FEMININE_AVATARS, MASCULINE_AVATARS, PLAYER_AVATARS as AVATARS } from './AnimeAvatar'
 import { LogoMark } from './Icons'
 
 type View = 'home' | 'load' | 'new' | 'missions'
@@ -244,6 +244,8 @@ function NewGame({ slots, mission, setMission, back }: { slots: SlotMeta[]; miss
   const [slot, setSlot] = useState(firstEmpty ?? SLOT_IDS[0])
   const [name, setName] = useState('')
   const [avatar, setAvatar] = useState(() => AVATARS[Math.floor(Math.random() * AVATARS.length)])
+  const [kind, setKind] = useState<'all' | 'm' | 'f'>('all')
+  const shown = kind === 'm' ? MASCULINE_AVATARS : kind === 'f' ? FEMININE_AVATARS : AVATARS
   const taken = slots.find((s) => s.id === slot)
   const ok = name.trim().length >= 2
   return (
@@ -263,10 +265,23 @@ function NewGame({ slots, mission, setMission, back }: { slots: SlotMeta[]; miss
         <div className="start-field">
           <span className="start-avatar-label">
             Avatar
-            <button type="button" onClick={() => setAvatar(AVATARS[Math.floor(Math.random() * AVATARS.length)])}>🎲 Aleatório</button>
+            <span className="start-avatar-tools">
+              {(
+                [
+                  ['all', 'Todos'],
+                  ['m', 'Masculinos'],
+                  ['f', 'Femininos'],
+                ] as const
+              ).map(([k, label]) => (
+                <button type="button" key={k} className={kind === k ? 'on' : ''} onClick={() => setKind(k)}>
+                  {label}
+                </button>
+              ))}
+              <button type="button" onClick={() => setAvatar(shown[Math.floor(Math.random() * shown.length)])}>🎲 Aleatório</button>
+            </span>
           </span>
           <div className="start-avatars">
-            {AVATARS.map((a) => (
+            {shown.map((a) => (
               <button type="button" key={a} className={a === avatar ? 'on' : ''} onClick={() => setAvatar(a)} aria-label={`Avatar ${a}`}>
                 <AnimeAvatar seed={a} size={40} />
               </button>
