@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAppCommands } from '../../store/appCommands'
 import { useOS } from '../../store/os'
-import { net, apiRoute, callExport, type Service } from '../../engine/node'
+import { net, callExport, staticFile, type Service } from '../../engine/node'
 import { actions } from '../../engine/actions'
 import { aws, type Instance } from '../../engine/aws'
 import { GitHubPage } from './GitHubPages'
@@ -225,14 +225,69 @@ function HttpPage({ host, path }: { host: string; path: string }) {
         tip={local ? 'Dica: o servidor não está rodando. No Terminal, dentro da pasta do projeto, rode npm start.' : 'Dica: a porta está liberada, mas nenhum processo está escutando nela. A aplicação está rodando no servidor?'}
       />
     )
-  if (path === '/health') return <pre className="raw">{'{"status":"ok"}'}</pre>
-  if (path === '/todos') return <pre className="raw">{apiRoute(svc, '/todos')}</pre>
-  if (path === '/products') return <pre className="raw">{JSON.stringify(callExport(svc.fs, svc.root, 'src/catalog.js', 'listProducts'))}</pre>
   const where = local ? `localhost:${port} (sua máquina)` : `${hostname}:${port} (EC2)`
   const label = svc.via ? `container Docker "${svc.via.replace('docker:', '')}" em ${where}` : where
+  // páginas do próprio projeto (express.static('public'))
+  if (staticFile(svc, path) !== undefined && !path.endsWith('.js') && !path.endsWith('.css')) return <ProjectPage key={`${svc.startedAt}-${path}`} svc={svc} path={path} />
+  if (path !== '/') {
+    const r = net.request(svc, 'GET', path)
+    return <pre className="raw">{r.body}</pre>
+  }
   if (svc.fs.exists(`${svc.root}/src/catalog.js`)) return <CatalogApp svc={svc} label={label} />
-  if (!svc.fs.exists(`${svc.root}/src/todos.js`)) return <pre className="raw">{`{"service":"${svc.name}","status":"ok"}`}</pre>
+  if (!svc.fs.exists(`${svc.root}/src/todos.js`)) return <pre className="raw">{net.request(svc, 'GET', '/').body}</pre>
   return <TodoApp svc={svc} label={label} />
+}
+
+/**
+ * Renderiza o HTML de public/ do projeto num iframe isolado. CSS e JS locais são embutidos,
+ * e o fetch() da página é respondido pelo "servidor" do simulador (as rotas do src/server.js).
+ */
+function ProjectPage({ svc, path }: { svc: Service; path: string }) {
+  const frame = useRef<HTMLIFrameElement>(null)
+  const html = useMemo(() => {
+    const dir = path === '/' || !path.includes('/', 1) ? '/' : path.slice(0, path.lastIndexOf('/') + 1)
+    const asset = (ref: string) => (/^(https?:)?\/\//.test(ref) ? undefined : staticFile(svc, ref.startsWith('/') ? ref : dir + ref))
+    let doc = staticFile(svc, path) ?? ''
+    doc = doc.replace(/<link[^>]*href=["']([^"']+\.css)["'][^>]*>/g, (m, href: string) => {
+      const css = asset(href)
+      return css === undefined ? m : `<style>${css}</style>`
+    })
+    doc = doc.replace(/<script([^>]*)src=["']([^"']+\.js)["']([^>]*)><\/script>/g, (m, a: string, src: string, b: string) => {
+      const js = asset(src)
+      return js === undefined ? m : `<script${a}${b}>${js.replace(/<\/script>/gi, '<\\/script>')}</script>`
+    })
+    const shim = `<script>(() => {
+  let seq = 0
+  const waiting = {}
+  addEventListener('message', (e) => {
+    const d = e.data
+    if (!d || d.__lab !== 'res' || !waiting[d.id]) return
+    waiting[d.id](new Response(d.body, { status: d.status, headers: { 'Content-Type': d.type } }))
+    delete waiting[d.id]
+  })
+  window.fetch = (input, init = {}) => new Promise((resolve) => {
+    const id = ++seq
+    waiting[id] = resolve
+    parent.postMessage({ __lab: 'fetch', id, url: String(input), method: init.method || 'GET', body: init.body == null ? null : String(init.body) }, '*')
+  })
+})()</script>`
+    return doc.includes('<head>') ? doc.replace('<head>', `<head>${shim}`) : shim + doc
+  }, [svc, path])
+
+  useEffect(() => {
+    const onMsg = (e: MessageEvent) => {
+      if (e.source !== frame.current?.contentWindow) return
+      const d = e.data as { __lab?: string; id: number; url: string; method: string; body: string | null }
+      if (d?.__lab !== 'fetch') return
+      const u = d.url.replace(/^https?:\/\/[^/]+/, '')
+      const r = net.request(svc, d.method, u.startsWith('/') ? u : `/${u}`, d.body ?? undefined)
+      frame.current?.contentWindow?.postMessage({ __lab: 'res', id: d.id, ...r }, '*')
+    }
+    window.addEventListener('message', onMsg)
+    return () => window.removeEventListener('message', onMsg)
+  }, [svc])
+
+  return <iframe ref={frame} className="pages-frame" title="app" sandbox="allow-scripts allow-forms" srcDoc={html} />
 }
 
 // ---------- abas ----------

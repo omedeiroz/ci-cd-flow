@@ -52,6 +52,47 @@ export const net = {
     ;(svc.memory ??= []).push({ op: 'toggle', id })
     changed()
   },
+  /** Uma requisição HTTP ao app (navegador e curl): rotas da API e arquivos de public/. */
+  request(svc: Service, method: string, path: string, body?: string): { status: number; body: string; type: string } {
+    const m = method.toUpperCase()
+    const json = (status: number, v: unknown) => ({ status, body: JSON.stringify(v), type: 'application/json' })
+    const text = (status: number, t: string) => ({ status, body: t, type: 'text/html' })
+    let server = ''
+    try {
+      server = svc.fs.read(`${svc.root}/src/server.js`)
+    } catch {
+      /* app sem server.js */
+    }
+    const has = (verb: string, route: string) => new RegExp(`app\\.${verb}\\(\\s*['"\`]${route.replace(/[/]/g, '\\/')}['"\`]`).test(server)
+    if (m === 'GET') {
+      if (path === '/health' && !server) return json(200, { status: 'ok' })
+      const api = apiRoute(svc, path)
+      if (api !== undefined) return { status: 200, body: api, type: 'application/json' }
+      const file = staticFile(svc, path)
+      if (file !== undefined) return { status: 200, body: file, type: path.endsWith('.css') ? 'text/css' : path.endsWith('.js') ? 'application/javascript' : 'text/html' }
+      return text(404, `Cannot GET ${path}`)
+    }
+    if (m === 'POST' && path === '/todos' && has('post', '/todos')) {
+      let title = ''
+      try {
+        title = String((JSON.parse(body || '{}') as { title?: unknown }).title ?? '')
+      } catch {
+        return text(400, 'SyntaxError: corpo da requisição não é JSON válido')
+      }
+      const err = net.todoAdd(svc, title)
+      if (err) return text(500, `Error: ${err}`)
+      const list = net.todos(svc)
+      return json(201, list[list.length - 1])
+    }
+    const pm = path.match(/^\/todos\/(\d+)$/)
+    if (m === 'PATCH' && pm && has('patch', '/todos/:id')) {
+      const id = Number(pm[1])
+      if (!net.todos(svc).some((t) => t.id === id)) return text(500, 'Error: tarefa não encontrada')
+      net.todoToggle(svc, id)
+      return json(200, net.todos(svc).find((t) => t.id === id))
+    }
+    return text(404, `Cannot ${m} ${path}`)
+  },
   stop(machineId: string, port: number) {
     delete services[`${machineId}:${port}`]
     changed()
@@ -290,6 +331,19 @@ export function apiRoute(svc: Service, path: string): string | undefined {
   return undefined
 }
 
+/** express.static('public'): devolve o arquivo pedido (ou o index.html para "/"). */
+export function staticFile(svc: Service, path: string): string | undefined {
+  const rel = path === '/' ? 'index.html' : path.replace(/^\/+/, '').split('?')[0]
+  if (rel.includes('..')) return undefined
+  try {
+    if (!/express\.static\(\s*['"]public['"]/.test(svc.fs.read(`${svc.root}/src/server.js`))) return undefined
+    const abs = `${svc.root}/public/${rel}`
+    return svc.fs.get(abs)?.type === 'file' ? svc.fs.read(abs) : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Carrega um módulo do projeto e, se for o de tarefas, refaz o que aconteceu desde que o servidor subiu. */
 function liveModule(svc: Service, req: (id: string) => unknown, rel: string): Record<string, (...a: unknown[]) => unknown> {
   const mod = req(`${svc.root}/${rel}`) as Record<string, (...a: unknown[]) => unknown>
@@ -298,6 +352,7 @@ function liveModule(svc: Service, req: (id: string) => unknown, rel: string): Re
     for (const op of svc.memory) {
       try {
         if (op.op === 'add') mod.addTodo?.(op.title)
+        else if (mod.toggleTodo) mod.toggleTodo(op.id)
         else {
           const t = (mod.listTodos?.() as Todo[] | undefined)?.find((x) => x.id === op.id)
           if (t) t.done = !t.done
@@ -505,9 +560,24 @@ registerCommand('node', {
 
 registerCommand('curl', {
   pkg: 'curl',
-  help: 'faz uma requisição HTTP: curl <url>',
+  help: 'faz uma requisição HTTP: curl <url> (-X POST -d \'{"title":"..."}\')',
   run: (args, { sh }) => {
-    const url = args.find((a) => !a.startsWith('-'))
+    let method = 'GET'
+    let data: string | undefined
+    let failOnError = false
+    let include = false
+    let url: string | undefined
+    for (let i = 0; i < args.length; i++) {
+      const a = args[i]
+      if (a === '-X' || a === '--request') method = (args[++i] ?? 'GET').toUpperCase()
+      else if (a === '-d' || a === '--data' || a === '--data-raw') data = args[++i]
+      else if (a === '-H' || a === '--header') i++
+      else if (a === '--fail' || (/^-[a-zA-Z]+$/.test(a) && a.includes('f'))) failOnError = true
+      else if (a === '-i' || a === '--include') include = true
+      if (/^-[a-zA-Z]+$/.test(a) && a.includes('i') && !a.startsWith('--')) include = true
+      if (!a.startsWith('-') && !['-X', '--request', '-d', '--data', '--data-raw', '-H', '--header'].includes(args[i - 1] ?? '')) url ??= a
+    }
+    if (data !== undefined && method === 'GET') method = 'POST'
     if (!url) return fail('curl: tente "curl http://localhost:3000/health"')
     const m = url.match(/^(?:https?:\/\/)?([^/]+)(\/.*)?$/)
     const host = m?.[1] ?? ''
@@ -520,12 +590,10 @@ registerCommand('curl', {
         return fail(`curl: (28) Failed to connect to ${hostname} port ${port} after 75002 ms: Couldn't connect to server`, 28)
       const svc = net.get(pub?.machineId ?? sh.machine.id, port)
       if (!svc) return fail(`curl: (7) Failed to connect to ${hostname} port ${port}: Connection refused`, 7)
-      if (path === '/health') return ok('{"status":"ok"}')
-      const route = apiRoute(svc, path)
-      if (route !== undefined) return ok(route)
-      if (path === '/') return ok(`<!DOCTYPE html><html><head><title>${svc.name}</title></head>...`)
-      if (args.some((a) => a === '--fail' || /^-[a-zA-Z]*f/.test(a))) return fail('curl: (22) The requested URL returned error: 404', 22)
-      return ok(`Cannot GET ${path}`)
+      const r = net.request(svc, method, path, data)
+      if (r.status >= 400 && failOnError) return fail(`curl: (22) The requested URL returned error: ${r.status}`, 22)
+      const head = include ? `HTTP/1.1 ${r.status}\nContent-Type: ${r.type}; charset=utf-8\n\n` : ''
+      return ok(head + r.body)
     }
     if (host === 'github.sim') return ok('<!DOCTYPE html><html><head><title>GitHub</title></head>...')
     return fail(`curl: (6) Could not resolve host: ${host}`, 6)

@@ -102,12 +102,13 @@ npm test
 npm start
 \`\`\`
 
-Depois acesse http://localhost:3000
+Depois acesse http://localhost:3000 (a página fica em \`public/\`).
 
 ## Endpoints
 
 - GET /todos — lista as tarefas
 - POST /todos — cria uma tarefa
+- PATCH /todos/:id — marca/desmarca uma tarefa
 - GET /health — usado pelo monitoramento
 `
 
@@ -127,21 +128,23 @@ const PACKAGE = `{
 `
 
 const SERVER = `const express = require('express')
-const { listTodos, addTodo } = require('./todos')
+const { listTodos, addTodo, toggleTodo } = require('./todos')
 
 const app = express()
 app.use(express.json())
-app.use(express.static('public'))
+app.use(express.static('public')) // a página (public/index.html) chama a API abaixo
 
 app.get('/health', (req, res) => res.json({ status: 'ok' }))
 app.get('/todos', (req, res) => res.json(listTodos()))
 app.post('/todos', (req, res) => res.status(201).json(addTodo(req.body.title)))
+app.patch('/todos/:id', (req, res) => res.json(toggleTodo(Number(req.params.id))))
 
 const PORT = process.env.PORT || 3000
 app.listen(PORT, () => console.log(\`Servidor rodando em http://localhost:\${PORT}\`))
 `
 
-const TODOS = `const todos = [
+const TODOS = `// As tarefas ficam só na memória do processo: reiniciar o servidor (ou fazer deploy) volta à lista inicial.
+const todos = [
   { id: 1, title: 'Aprender o terminal', done: true },
   { id: 2, title: 'Clonar o repositório', done: false },
   { id: 3, title: 'Configurar o pipeline de CI/CD', done: false },
@@ -158,7 +161,101 @@ function addTodo(title) {
   return todo
 }
 
-module.exports = { listTodos, addTodo }
+function toggleTodo(id) {
+  const todo = todos.find((t) => t.id === id)
+  if (!todo) throw new Error('tarefa não encontrada')
+  todo.done = !todo.done
+  return todo
+}
+
+module.exports = { listTodos, addTodo, toggleTodo }
+`
+
+const PUBLIC_INDEX = `<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <title>Tarefas</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="card">
+    <h1>✓ Tarefas</h1>
+    <p class="sub">todo-api</p>
+
+    <form id="nova">
+      <input id="titulo" placeholder="Nova tarefa…" autocomplete="off">
+      <button>Adicionar</button>
+    </form>
+    <p id="erro" class="erro"></p>
+
+    <ul id="lista"></ul>
+    <p class="rodape" id="total"></p>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
+`
+
+const PUBLIC_JS = `// Front-end da todo-api: só chama a API (GET, POST e PATCH em /todos).
+const lista = document.getElementById('lista')
+const erro = document.getElementById('erro')
+
+async function carregar() {
+  const res = await fetch('/todos')
+  const todos = await res.json()
+  lista.innerHTML = ''
+  for (const t of todos) {
+    const li = document.createElement('li')
+    li.className = t.done ? 'feita' : ''
+    li.innerHTML = '<span class="caixa">' + (t.done ? '✓' : '') + '</span>'
+    li.append(t.title)
+    li.onclick = async () => {
+      await fetch('/todos/' + t.id, { method: 'PATCH' })
+      carregar()
+    }
+    lista.append(li)
+  }
+  document.getElementById('total').textContent = 'GET /todos · ' + todos.length + ' tarefas'
+}
+
+document.getElementById('nova').onsubmit = async (e) => {
+  e.preventDefault()
+  const campo = document.getElementById('titulo')
+  const res = await fetch('/todos', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: campo.value.trim() }),
+  })
+  erro.textContent = res.ok ? '' : 'Erro ' + res.status + ': ' + (await res.text())
+  campo.value = ''
+  carregar()
+}
+
+carregar()
+`
+
+const PUBLIC_CSS = `body {
+  margin: 0;
+  min-height: 100vh;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  background: linear-gradient(135deg, #e3f6e8, #e1ecfb);
+  color: #1d1d1f;
+}
+.card { max-width: 380px; margin: 40px auto; padding: 24px; background: #fff; border-radius: 16px; box-shadow: 0 12px 30px rgba(0, 0, 0, .08); }
+h1 { margin: 0; font-size: 26px; }
+.sub { margin: 4px 0 16px; color: #6e6e73; font-size: 13px; }
+form { display: flex; gap: 8px; }
+input { flex: 1; padding: 8px 10px; border: 1px solid #d2d2d7; border-radius: 8px; font: inherit; }
+button { padding: 8px 14px; border: 0; border-radius: 8px; background: #1f883d; color: #fff; font-weight: 600; cursor: pointer; }
+ul { list-style: none; padding: 0; margin: 12px 0 0; }
+li { display: flex; align-items: center; gap: 10px; padding: 10px 2px; border-bottom: 1px solid #eee; cursor: pointer; }
+.caixa { width: 18px; height: 18px; border: 1.5px solid #c7c7cc; border-radius: 5px; display: grid; place-items: center; font-size: 12px; color: #fff; }
+li.feita { color: #8e8e93; text-decoration: line-through; }
+li.feita .caixa { background: #1f883d; border-color: #1f883d; }
+.erro { color: #c9302c; font-size: 12px; margin: 6px 0 0; }
+.rodape { margin: 14px 0 0; color: #8e8e93; font: 12px ui-monospace, monospace; }
 `
 
 const TEST = `const test = require('node:test')
@@ -205,13 +302,14 @@ const GITIGNORE = `node_modules/
 `
 
 const TODOS_V1 = TODOS.replace("  if (!title) throw new Error('title é obrigatório')\n", '')
+const PUBLIC = { 'public/index.html': PUBLIC_INDEX, 'public/app.js': PUBLIC_JS, 'public/style.css': PUBLIC_CSS }
 
 function seedTodoApi(): RemoteRepo {
   const day = 86_400_000
   const t0 = Date.now() - 12 * day
   const c1 = makeCommit(
     null,
-    { 'README.md': README, 'package.json': PACKAGE, 'package-lock.json': LOCK, '.gitignore': GITIGNORE, 'src/server.js': SERVER, 'src/todos.js': TODOS_V1 },
+    { 'README.md': README, 'package.json': PACKAGE, 'package-lock.json': LOCK, '.gitignore': GITIGNORE, 'src/server.js': SERVER, 'src/todos.js': TODOS_V1, ...PUBLIC },
     'feat: estrutura inicial da API',
     'Senku Ishigami',
     'senku@devlab.sim',

@@ -26,6 +26,15 @@ it('tarefas na memória do servidor', () => {
   expect(net.todos(again)).toHaveLength(4)
   expect(net.todos(again).find((t) => t.id === 2)!.done).toBe(true)
 
+  // curl fala com as mesmas rotas do src/server.js
+  expect(s.run(`curl -X POST http://localhost:3000/todos -H 'Content-Type: application/json' -d '{"title":"Via curl"}'`).all).toContain('"title":"Via curl"')
+  expect(s.run('curl -X PATCH http://localhost:3000/todos/5').all).toContain('"done":true')
+  expect(s.run(`curl -i -X POST http://localhost:3000/todos -d '{"title":""}'`).all).toContain('HTTP/1.1 500')
+  expect(s.run('curl -X DELETE http://localhost:3000/todos/1').all).toContain('Cannot DELETE /todos/1')
+  expect(s.run('curl http://localhost:3000/').all).toContain('<title>Tarefas</title>')
+  expect(s.run('curl http://localhost:3000/app.js').all).toContain("fetch('/todos')")
+  expect(net.todos(again)).toHaveLength(5)
+
   // reiniciar o processo apaga
   s.run('npm stop')
   s.run('npm start &')
